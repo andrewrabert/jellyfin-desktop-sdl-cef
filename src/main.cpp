@@ -1,11 +1,29 @@
 #include <SDL2/SDL.h>
-#include <GL/glew.h>
 #include <SDL2/SDL_opengl.h>
 #include <iostream>
-#include <vector>
+#include <filesystem>
+
+#include "include/cef_app.h"
+#include "include/cef_browser.h"
+#include "include/cef_command_line.h"
+
 #include "renderer.h"
+#include "cef_app.h"
+#include "cef_client.h"
 
 int main(int argc, char* argv[]) {
+    // CEF initialization
+    CefMainArgs main_args(argc, argv);
+
+    CefRefPtr<App> app(new App());
+
+    // Check if this is a subprocess
+    int exit_code = CefExecuteProcess(main_args, app, nullptr);
+    if (exit_code >= 0) {
+        return exit_code;
+    }
+
+    // SDL initialization
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         std::cerr << "SDL_Init failed: " << SDL_GetError() << std::endl;
         return 1;
@@ -40,20 +58,9 @@ int main(int argc, char* argv[]) {
     }
 
     SDL_GL_SetSwapInterval(1);
-
-    // Initialize GLEW
-    glewExperimental = GL_TRUE;
-    GLenum glew_status = glewInit();
-    if (glew_status != GLEW_OK) {
-        std::cerr << "glewInit failed: " << glewGetErrorString(glew_status) << std::endl;
-        SDL_GL_DeleteContext(gl_context);
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
-    }
-
     std::cout << "OpenGL Version: " << glGetString(GL_VERSION) << std::endl;
 
+    // Initialize renderer
     Renderer renderer;
     if (!renderer.init(width, height)) {
         std::cerr << "Renderer init failed" << std::endl;
@@ -63,25 +70,63 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Create test pattern (gradient)
-    std::vector<uint8_t> test_buffer(width * height * 4);
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            int i = (y * width + x) * 4;
-            test_buffer[i + 0] = (uint8_t)(255 * x / width);  // B
-            test_buffer[i + 1] = (uint8_t)(255 * y / height); // G
-            test_buffer[i + 2] = 128;                          // R
-            test_buffer[i + 3] = 255;                          // A
-        }
-    }
-    renderer.updateTexture(test_buffer.data(), width, height);
+    // CEF settings
+    CefSettings settings;
+    settings.windowless_rendering_enabled = true;
+    settings.no_sandbox = true;  // Sandbox requires separate executable
 
+    // Get executable path for resources
+    std::filesystem::path exe_path = std::filesystem::canonical("/proc/self/exe").parent_path();
+    CefString(&settings.resources_dir_path).FromString(exe_path.string());
+    CefString(&settings.locales_dir_path).FromString((exe_path / "locales").string());
+
+    if (!CefInitialize(main_args, settings, app, nullptr)) {
+        std::cerr << "CefInitialize failed" << std::endl;
+        SDL_GL_DeleteContext(gl_context);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+
+    // Create browser
+    bool texture_dirty = false;
+    const void* paint_buffer = nullptr;
+    int paint_width = 0, paint_height = 0;
+
+    CefRefPtr<Client> client(new Client(width, height,
+        [&](const void* buffer, int w, int h) {
+            paint_buffer = buffer;
+            paint_width = w;
+            paint_height = h;
+            texture_dirty = true;
+        }
+    ));
+
+    CefWindowInfo window_info;
+    window_info.SetAsWindowless(0);
+
+    CefBrowserSettings browser_settings;
+
+    // Load local HTML file
+    std::string html_path = "file://" + (exe_path.parent_path() / "resources" / "index.html").string();
+    std::cout << "Loading: " << html_path << std::endl;
+
+    CefBrowserHost::CreateBrowser(window_info, client, html_path, browser_settings, nullptr, nullptr);
+
+    // Main loop
     bool running = true;
-    while (running) {
+    while (running && !client->isClosed()) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) running = false;
             if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) running = false;
+        }
+
+        CefDoMessageLoopWork();
+
+        if (texture_dirty && paint_buffer) {
+            renderer.updateTexture(paint_buffer, paint_width, paint_height);
+            texture_dirty = false;
         }
 
         glClear(GL_COLOR_BUFFER_BIT);
@@ -89,6 +134,8 @@ int main(int argc, char* argv[]) {
         SDL_GL_SwapWindow(window);
     }
 
+    // Cleanup
+    CefShutdown();
     SDL_GL_DeleteContext(gl_context);
     SDL_DestroyWindow(window);
     SDL_Quit();
