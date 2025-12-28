@@ -1,5 +1,6 @@
 #include "cef_app.h"
 #include "include/cef_browser.h"
+#include "include/cef_command_line.h"
 #include "include/cef_frame.h"
 #include "include/wrapper/cef_helpers.h"
 #include <iostream>
@@ -20,6 +21,29 @@ static std::string readFile(const std::string& path) {
     std::stringstream buffer;
     buffer << file.rdbuf();
     return buffer.str();
+}
+
+void App::OnBeforeCommandLineProcessing(const CefString& process_type,
+                                        CefRefPtr<CefCommandLine> command_line) {
+    // Disable all Google services
+    command_line->AppendSwitch("disable-background-networking");
+    command_line->AppendSwitch("disable-client-side-phishing-detection");
+    command_line->AppendSwitch("disable-default-apps");
+    command_line->AppendSwitch("disable-extensions");
+    command_line->AppendSwitch("disable-component-update");
+    command_line->AppendSwitch("disable-sync");
+    command_line->AppendSwitch("disable-translate");
+    command_line->AppendSwitch("disable-domain-reliability");
+    command_line->AppendSwitch("disable-breakpad");
+    command_line->AppendSwitch("no-pings");
+    command_line->AppendSwitchWithValue("disable-features",
+        "PushMessaging,BackgroundSync,SafeBrowsing,NetworkService,"
+        "Translate,OptimizationHints,MediaRouter,DialMediaRouteProvider,"
+        "AcceptCHFrame,AutofillServerCommunication,CertificateTransparencyComponentUpdater");
+    // Empty API keys prevent any Google API calls
+    command_line->AppendSwitchWithValue("google-api-key", "");
+    command_line->AppendSwitchWithValue("google-default-client-id", "");
+    command_line->AppendSwitchWithValue("google-default-client-secret", "");
 }
 
 void App::OnContextInitialized() {
