@@ -27,6 +27,13 @@ Minimal CEF application with SDL2 and OpenGL.
 ## Build
 
 ```bash
+cmake -B build -DCEF_ROOT=/path/to/cef_binary_xxx
+cmake --build build
+```
+
+Or if CEF is in `third_party/cef/`:
+
+```bash
 cmake -B build
 cmake --build build
 ```
@@ -34,5 +41,7 @@ cmake --build build
 ## Run
 
 ```bash
-./build/jellyfin-desktop
+./build/jellyfin-desktop --single-process
 ```
+
+**Note:** The `--single-process` flag is currently required due to a subprocess issue. This runs CEF in single-process mode which is suitable for development.

@@ -5,6 +5,20 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Match CEF's compile flags for ABI compatibility
+if(UNIX AND NOT APPLE)
+    add_compile_options(
+        -fno-strict-aliasing
+        -fPIC
+        -fstack-protector
+        -funwind-tables
+        -fvisibility=hidden
+        --param=ssp-buffer-size=4
+        -pipe
+        -pthread
+    )
+endif()
+
 # CEF configuration
 set(CEF_ROOT "${CMAKE_SOURCE_DIR}/third_party/cef" CACHE PATH "CEF binary distribution root")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")

@@ -6,6 +6,7 @@
 #include <atomic>
 #include <vector>
 #include <cstring>
+#include <mutex>
 
 #include "include/cef_app.h"
 #include "include/cef_browser.h"
@@ -89,6 +90,7 @@ int main(int argc, char* argv[]) {
     CefSettings settings;
     settings.windowless_rendering_enabled = true;
     settings.no_sandbox = true;  // Sandbox requires separate executable
+    // NOTE: Run with --single-process flag if subprocess crashes occur
 
     // Get executable path for resources
     std::filesystem::path exe_path = std::filesystem::canonical("/proc/self/exe").parent_path();
@@ -105,11 +107,13 @@ int main(int argc, char* argv[]) {
 
     // Create browser
     std::atomic<bool> texture_dirty{false};
+    std::mutex buffer_mutex;
     std::vector<uint8_t> paint_buffer_copy;
     int paint_width = 0, paint_height = 0;
 
     CefRefPtr<Client> client(new Client(width, height,
         [&](const void* buffer, int w, int h) {
+            std::lock_guard<std::mutex> lock(buffer_mutex);
             size_t size = w * h * 4;
             paint_buffer_copy.resize(size);
             memcpy(paint_buffer_copy.data(), buffer, size);
@@ -141,8 +145,11 @@ int main(int argc, char* argv[]) {
 
         CefDoMessageLoopWork();
 
-        if (texture_dirty && !paint_buffer_copy.empty()) {
-            renderer.updateTexture(paint_buffer_copy.data(), paint_width, paint_height);
+        if (texture_dirty) {
+            std::lock_guard<std::mutex> lock(buffer_mutex);
+            if (!paint_buffer_copy.empty()) {
+                renderer.updateTexture(paint_buffer_copy.data(), paint_width, paint_height);
+            }
             texture_dirty = false;
         }
 

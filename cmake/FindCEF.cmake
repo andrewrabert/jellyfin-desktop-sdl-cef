@@ -32,12 +32,12 @@ else() # Linux
     set(CEF_LIB_DIR "${CEF_ROOT}/Release")
     set(CEF_LIBRARIES
         "${CEF_LIB_DIR}/libcef.so"
-        "${CEF_ROOT}/libcef_dll_wrapper/libcef_dll_wrapper.a"
+        "${CEF_ROOT}/build/libcef_dll_wrapper/libcef_dll_wrapper.a"
     )
 endif()
 
 # Check for wrapper library - must be built first
-if(NOT EXISTS "${CEF_ROOT}/libcef_dll_wrapper")
+if(NOT EXISTS "${CEF_ROOT}/build/libcef_dll_wrapper/libcef_dll_wrapper.a")
     message(WARNING "libcef_dll_wrapper not found. You may need to build it first:")
     message(WARNING "  cd ${CEF_ROOT} && cmake -B build && cmake --build build --target libcef_dll_wrapper")
 endif()
