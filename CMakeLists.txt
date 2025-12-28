@@ -100,12 +100,16 @@ add_custom_command(TARGET jellyfin-desktop POST_BUILD
         "$<TARGET_FILE_DIR:jellyfin-desktop>"
 )
 
-# Copy application resources
-add_custom_command(TARGET jellyfin-desktop POST_BUILD
+# Copy application resources (always sync when changed)
+file(GLOB_RECURSE RESOURCE_FILES "${CMAKE_SOURCE_DIR}/resources/*")
+add_custom_target(copy_resources ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_SOURCE_DIR}/resources"
-        "$<TARGET_FILE_DIR:jellyfin-desktop>/resources"
+        "${CMAKE_BINARY_DIR}/resources"
+    DEPENDS ${RESOURCE_FILES}
+    COMMENT "Copying resources"
 )
+add_dependencies(jellyfin-desktop copy_resources)
 
 # Copy libmpv to build directory
 add_custom_command(TARGET jellyfin-desktop POST_BUILD

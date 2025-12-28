@@ -1,4 +1,4 @@
-async function tryConnect(server) {
+async function tryConnect(server, spinnerStartTime = Date.now()) {
     try {
         if (!server.startsWith("http")) {
             server = "http://" + server;
@@ -15,6 +15,16 @@ async function tryConnect(server) {
         if (window.jmpNative && window.jmpNative.saveServerUrl) {
             window.jmpNative.saveServerUrl(server);
         }
+
+        // Ensure spinner shows for at least 1s
+        const elapsed = Date.now() - spinnerStartTime;
+        if (elapsed < 1000) {
+            await new Promise(r => setTimeout(r, 1000 - elapsed));
+        }
+
+        // Fade out page before navigating
+        document.body.classList.add('fade-out');
+        await new Promise(r => setTimeout(r, 250));
 
         // Navigation will clean up handlers, but do it explicitly
         window.location = resolvedUrl;
@@ -58,11 +68,12 @@ const startConnecting = async () => {
     address.style.visibility = 'hidden';
     address.disabled = true;
     spinner.style.display = 'block';
+    const spinnerStart = Date.now();
     button.style.visibility = 'hidden';
     document.addEventListener('keydown', cancelOnEscape);
 
     // C++ handles retries, just wait for result
-    const connected = await tryConnect(server);
+    const connected = await tryConnect(server, spinnerStart);
 
     if (!connected) {
         isConnecting = false;
@@ -167,11 +178,12 @@ document.addEventListener('keydown', (e) => {
         address.style.visibility = 'hidden';
         address.disabled = true;
         spinner.style.display = 'block';
+        const spinnerStart = Date.now();
         button.style.visibility = 'hidden';
         document.addEventListener('keydown', cancelOnEscape);
 
         // C++ handles retries, just wait for result
-        const connected = await tryConnect(savedServer);
+        const connected = await tryConnect(savedServer, spinnerStart);
 
         if (!connected) {
             // User cancelled or error - show UI
