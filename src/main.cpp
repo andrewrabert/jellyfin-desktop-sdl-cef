@@ -119,29 +119,17 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Initialize mpv player (optional - only if video path provided)
+    // Initialize mpv player
     MpvPlayer mpv;
     bool has_video = false;
-    if (!video_path.empty()) {
-        if (!mpv.init(width, height)) {
-            std::cerr << "MpvPlayer init failed" << std::endl;
-            SDL_GL_DeleteContext(gl_context);
-            SDL_DestroyWindow(window);
-            SDL_Quit();
-            return 1;
-        }
-
-        if (!mpv.loadFile(video_path)) {
-            std::cerr << "Failed to load: " << video_path << std::endl;
-            SDL_GL_DeleteContext(gl_context);
-            SDL_DestroyWindow(window);
-            SDL_Quit();
-            return 1;
-        }
-
-        std::cout << "Playing: " << video_path << std::endl;
-        has_video = true;
+    if (!mpv.init(width, height)) {
+        std::cerr << "MpvPlayer init failed" << std::endl;
+        SDL_GL_DeleteContext(gl_context);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
     }
+
 
     // CEF settings
     CefSettings settings;
@@ -168,7 +156,17 @@ int main(int argc, char* argv[]) {
     std::vector<uint8_t> paint_buffer_copy;
     int paint_width = 0, paint_height = 0;
 
+    // Player command queue (filled by IPC callback, processed in main loop)
+    struct PlayerCmd {
+        std::string cmd;
+        std::string url;
+        int intArg;
+    };
+    std::mutex cmd_mutex;
+    std::vector<PlayerCmd> pending_cmds;
+
     CefRefPtr<Client> client(new Client(width, height,
+        // Paint callback
         [&](const void* buffer, int w, int h) {
             std::lock_guard<std::mutex> lock(buffer_mutex);
             size_t size = w * h * 4;
@@ -177,6 +175,11 @@ int main(int argc, char* argv[]) {
             paint_width = w;
             paint_height = h;
             texture_dirty = true;
+        },
+        // Player message callback (from renderer IPC)
+        [&](const std::string& cmd, const std::string& arg, int intArg) {
+            std::lock_guard<std::mutex> lock(cmd_mutex);
+            pending_cmds.push_back({cmd, arg, intArg});
         }
     ));
 
@@ -225,6 +228,7 @@ int main(int argc, char* argv[]) {
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) running = false;
             if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) running = false;
+
 
             // Track activity
             if (event.type == SDL_MOUSEMOTION ||
@@ -313,6 +317,47 @@ int main(int argc, char* argv[]) {
             last_activity = now;
         }
 
+        // Process player commands from IPC
+        {
+            std::lock_guard<std::mutex> lock(cmd_mutex);
+            for (const auto& cmd : pending_cmds) {
+                if (cmd.cmd == "load") {
+                    std::cout << "[MAIN] playerLoad: " << cmd.url << std::endl;
+                    if (mpv.loadFile(cmd.url)) {
+                        has_video = true;
+                        std::cout << "[MAIN] Video loaded, emitting playing signal" << std::endl;
+                        client->emitPlaying();
+                    } else {
+                        std::cerr << "[MAIN] Load failed" << std::endl;
+                        client->emitError("Failed to load video");
+                    }
+                } else if (cmd.cmd == "stop") {
+                    std::cout << "[MAIN] playerStop" << std::endl;
+                    mpv.stop();
+                    has_video = false;
+                    client->emitFinished();
+                } else if (cmd.cmd == "pause") {
+                    std::cout << "[MAIN] playerPause" << std::endl;
+                    mpv.pause();
+                    client->emitPaused();
+                } else if (cmd.cmd == "play") {
+                    std::cout << "[MAIN] playerPlay" << std::endl;
+                    mpv.play();
+                    client->emitPlaying();
+                } else if (cmd.cmd == "seek") {
+                    std::cout << "[MAIN] playerSeek: " << cmd.intArg << "ms" << std::endl;
+                    mpv.seek(static_cast<double>(cmd.intArg) / 1000.0);
+                } else if (cmd.cmd == "volume") {
+                    std::cout << "[MAIN] playerSetVolume: " << cmd.intArg << std::endl;
+                    mpv.setVolume(cmd.intArg);
+                } else if (cmd.cmd == "mute") {
+                    std::cout << "[MAIN] playerSetMuted: " << cmd.intArg << std::endl;
+                    mpv.setMuted(cmd.intArg != 0);
+                }
+            }
+            pending_cmds.clear();
+        }
+
         // Calculate fade
         float idle_sec = std::chrono::duration<float>(now - last_activity).count();
         float target_alpha;
@@ -326,6 +371,21 @@ int main(int argc, char* argv[]) {
         overlay_alpha = target_alpha;
 
         CefDoMessageLoopWork();
+
+        // Update position/duration to JS periodically when playing
+        static auto last_position_update = Clock::now();
+        if (has_video && mpv.isPlaying()) {
+            auto time_since_update = std::chrono::duration<float>(now - last_position_update).count();
+            if (time_since_update >= 0.5f) {  // Update every 500ms
+                double pos = mpv.getPosition() * 1000.0;  // seconds -> ms
+                double dur = mpv.getDuration() * 1000.0;
+                client->updatePosition(pos);
+                if (dur > 0) {
+                    client->updateDuration(dur);
+                }
+                last_position_update = now;
+            }
+        }
 
         // Update CEF texture
         if (texture_dirty) {

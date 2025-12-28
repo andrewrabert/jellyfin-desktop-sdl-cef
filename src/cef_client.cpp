@@ -1,8 +1,67 @@
 #include "cef_client.h"
 #include <iostream>
 
-Client::Client(int width, int height, PaintCallback on_paint)
-    : width_(width), height_(height), on_paint_(std::move(on_paint)) {}
+Client::Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg)
+    : width_(width), height_(height), on_paint_(std::move(on_paint)), on_player_msg_(std::move(on_player_msg)) {}
+
+bool Client::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
+                               cef_log_severity_t level,
+                               const CefString& message,
+                               const CefString& source,
+                               int line) {
+    std::string levelStr;
+    switch (level) {
+        case LOGSEVERITY_DEBUG: levelStr = "DEBUG"; break;
+        case LOGSEVERITY_INFO: levelStr = "INFO"; break;
+        case LOGSEVERITY_WARNING: levelStr = "WARN"; break;
+        case LOGSEVERITY_ERROR: levelStr = "ERROR"; break;
+        default: levelStr = "LOG"; break;
+    }
+    std::cout << "[JS:" << levelStr << "] " << message.ToString() << std::endl;
+    return false;  // Allow default handling too
+}
+
+bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+                                       CefRefPtr<CefFrame> frame,
+                                       CefProcessId source_process,
+                                       CefRefPtr<CefProcessMessage> message) {
+    if (!on_player_msg_) return false;
+
+    std::string name = message->GetName().ToString();
+    CefRefPtr<CefListValue> args = message->GetArgumentList();
+
+    std::cout << "[IPC] Received message: " << name << std::endl;
+
+    if (name == "playerLoad") {
+        std::string url = args->GetString(0).ToString();
+        int startMs = args->GetSize() > 1 ? args->GetInt(1) : 0;
+        on_player_msg_("load", url, startMs);
+        return true;
+    } else if (name == "playerStop") {
+        on_player_msg_("stop", "", 0);
+        return true;
+    } else if (name == "playerPause") {
+        on_player_msg_("pause", "", 0);
+        return true;
+    } else if (name == "playerPlay") {
+        on_player_msg_("play", "", 0);
+        return true;
+    } else if (name == "playerSeek") {
+        int ms = args->GetInt(0);
+        on_player_msg_("seek", "", ms);
+        return true;
+    } else if (name == "playerSetVolume") {
+        int vol = args->GetInt(0);
+        on_player_msg_("volume", "", vol);
+        return true;
+    } else if (name == "playerSetMuted") {
+        bool muted = args->GetBool(0);
+        on_player_msg_("mute", "", muted ? 1 : 0);
+        return true;
+    }
+
+    return false;
+}
 
 void Client::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
     rect.Set(0, 0, width_, height_);
@@ -125,4 +184,36 @@ void Client::resize(int width, int height) {
     if (browser_) {
         browser_->GetHost()->WasResized();
     }
+}
+
+void Client::executeJS(const std::string& code) {
+    if (!browser_) return;
+    CefRefPtr<CefFrame> frame = browser_->GetMainFrame();
+    if (frame) {
+        frame->ExecuteJavaScript(code, frame->GetURL(), 0);
+    }
+}
+
+void Client::emitPlaying() {
+    executeJS("if(window._nativeEmit) window._nativeEmit('playing');");
+}
+
+void Client::emitPaused() {
+    executeJS("if(window._nativeEmit) window._nativeEmit('paused');");
+}
+
+void Client::emitFinished() {
+    executeJS("if(window._nativeEmit) window._nativeEmit('finished');");
+}
+
+void Client::emitError(const std::string& msg) {
+    executeJS("if(window._nativeEmit) window._nativeEmit('error', '" + msg + "');");
+}
+
+void Client::updatePosition(double positionMs) {
+    executeJS("if(window._nativeUpdatePosition) window._nativeUpdatePosition(" + std::to_string(positionMs) + ");");
+}
+
+void Client::updateDuration(double durationMs) {
+    executeJS("if(window._nativeUpdateDuration) window._nativeUpdateDuration(" + std::to_string(durationMs) + ");");
 }

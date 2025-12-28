@@ -53,6 +53,8 @@ bool MpvPlayer::init(int width, int height) {
     mpv_set_option_string(mpv_, "vo", "libmpv");
     mpv_set_option_string(mpv_, "hwdec", "auto");
     mpv_set_option_string(mpv_, "keep-open", "yes");
+    mpv_set_option_string(mpv_, "terminal", "yes");
+    mpv_set_option_string(mpv_, "msg-level", "all=v");  // Verbose logging
 
     if (mpv_initialize(mpv_) < 0) {
         std::cerr << "mpv_initialize failed" << std::endl;
@@ -103,7 +105,70 @@ bool MpvPlayer::init(int width, int height) {
 
 bool MpvPlayer::loadFile(const std::string& path) {
     const char* cmd[] = {"loadfile", path.c_str(), nullptr};
-    return mpv_command(mpv_, cmd) >= 0;
+    int ret = mpv_command(mpv_, cmd);
+    if (ret >= 0) {
+        playing_ = true;
+    }
+    return ret >= 0;
+}
+
+void MpvPlayer::stop() {
+    if (!mpv_) return;
+    const char* cmd[] = {"stop", nullptr};
+    mpv_command(mpv_, cmd);
+    playing_ = false;
+}
+
+void MpvPlayer::pause() {
+    if (!mpv_) return;
+    int pause = 1;
+    mpv_set_property(mpv_, "pause", MPV_FORMAT_FLAG, &pause);
+}
+
+void MpvPlayer::play() {
+    if (!mpv_) return;
+    int pause = 0;
+    mpv_set_property(mpv_, "pause", MPV_FORMAT_FLAG, &pause);
+}
+
+void MpvPlayer::seek(double seconds) {
+    if (!mpv_) return;
+    std::string time_str = std::to_string(seconds);
+    const char* cmd[] = {"seek", time_str.c_str(), "absolute", nullptr};
+    mpv_command(mpv_, cmd);
+}
+
+void MpvPlayer::setVolume(int volume) {
+    if (!mpv_) return;
+    double vol = static_cast<double>(volume);
+    mpv_set_property(mpv_, "volume", MPV_FORMAT_DOUBLE, &vol);
+}
+
+void MpvPlayer::setMuted(bool muted) {
+    if (!mpv_) return;
+    int m = muted ? 1 : 0;
+    mpv_set_property(mpv_, "mute", MPV_FORMAT_FLAG, &m);
+}
+
+double MpvPlayer::getPosition() const {
+    if (!mpv_) return 0;
+    double pos = 0;
+    mpv_get_property(mpv_, "time-pos", MPV_FORMAT_DOUBLE, &pos);
+    return pos;
+}
+
+double MpvPlayer::getDuration() const {
+    if (!mpv_) return 0;
+    double dur = 0;
+    mpv_get_property(mpv_, "duration", MPV_FORMAT_DOUBLE, &dur);
+    return dur;
+}
+
+bool MpvPlayer::isPaused() const {
+    if (!mpv_) return false;
+    int paused = 0;
+    mpv_get_property(mpv_, "pause", MPV_FORMAT_FLAG, &paused);
+    return paused != 0;
 }
 
 void MpvPlayer::render() {

@@ -18,6 +18,20 @@ public:
     bool loadFile(const std::string& path);
     void render();
 
+    // Playback control
+    void stop();
+    void pause();
+    void play();
+    void seek(double seconds);
+    void setVolume(int volume);  // 0-100
+    void setMuted(bool muted);
+
+    // State queries
+    double getPosition() const;  // seconds
+    double getDuration() const;  // seconds
+    bool isPaused() const;
+    bool isPlaying() const { return playing_; }
+
     void setRedrawCallback(RedrawCallback cb) { redraw_callback_ = cb; }
     GLuint getTexture() const { return texture_; }
     bool needsRedraw() const { return needs_redraw_; }
@@ -37,4 +51,5 @@ private:
 
     RedrawCallback redraw_callback_;
     bool needs_redraw_ = false;
+    bool playing_ = false;
 };
