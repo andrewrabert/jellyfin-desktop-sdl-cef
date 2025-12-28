@@ -1,0 +1,11 @@
+# Build
+build/
+
+# CEF binary distribution
+third_party/cef/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+compile_commands.json
