@@ -17,6 +17,7 @@
 #include "vulkan_context.h"
 #include "vulkan_compositor.h"
 #include "mpv_player_vk.h"
+#include "wayland_subsurface.h"
 #include "cef_app.h"
 #include "cef_client.h"
 #include "settings.h"
@@ -88,10 +89,24 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Initialize Wayland subsurface for HDR video
+    WaylandSubsurface subsurface;
+    bool has_subsurface = false;
+    if (subsurface.init(window, vk.instance(), vk.physicalDevice(), vk.device(), vk.queueFamily())) {
+        if (subsurface.createSwapchain(width, height)) {
+            has_subsurface = true;
+            std::cout << "Using Wayland subsurface for video (HDR: "
+                      << (subsurface.isHdr() ? "yes" : "no") << ")" << std::endl;
+        }
+    }
+    if (!has_subsurface) {
+        std::cout << "Wayland subsurface unavailable, using main swapchain for video" << std::endl;
+    }
+
     // Initialize mpv player
     MpvPlayerVk mpv;
     bool has_video = false;
-    if (!mpv.init(&vk)) {
+    if (!mpv.init(&vk, has_subsurface ? &subsurface : nullptr)) {
         std::cerr << "MpvPlayerVk init failed" << std::endl;
         SDL_DestroyWindow(window);
         SDL_Quit();
@@ -295,6 +310,9 @@ int main(int argc, char* argv[]) {
                     current_height = event.window.data2;
                     vkDeviceWaitIdle(vk.device());
                     vk.recreateSwapchain(current_width, current_height);
+                    if (has_subsurface) {
+                        subsurface.recreateSwapchain(current_width, current_height);
+                    }
                     compositor.resize(current_width, current_height);
                     client->resize(current_width, current_height);
                 }
@@ -330,6 +348,9 @@ int main(int argc, char* argv[]) {
                     std::cout << "[MAIN] playerLoad: " << cmd.url << std::endl;
                     if (mpv.loadFile(cmd.url)) {
                         has_video = true;
+                        if (has_subsurface && subsurface.isHdr()) {
+                            subsurface.setColorspace();
+                        }
                         client->emitPlaying();
                     } else {
                         client->emitError("Failed to load video");
@@ -402,6 +423,9 @@ int main(int argc, char* argv[]) {
             SDL_GetWindowSize(window, &current_width, &current_height);
             vkDeviceWaitIdle(vk.device());
             vk.recreateSwapchain(current_width, current_height);
+            if (has_subsurface) {
+                subsurface.recreateSwapchain(current_width, current_height);
+            }
             compositor.resize(current_width, current_height);
             continue;
         }
@@ -412,12 +436,35 @@ int main(int argc, char* argv[]) {
         begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         vkBeginCommandBuffer(cmd_buffer, &begin_info);
 
-        // Clear or render video
-        if (has_video) {
-            // mpv renders directly to swapchain image
+        // Render video to subsurface (if available) or main swapchain
+        if (has_video && has_subsurface) {
+            // mpv renders to separate HDR subsurface
+            uint32_t sub_image_idx;
+            VkResult sub_result = vkAcquireNextImageKHR(vk.device(), subsurface.swapchain(), UINT64_MAX,
+                                                         VK_NULL_HANDLE, VK_NULL_HANDLE, &sub_image_idx);
+            if (sub_result == VK_SUCCESS || sub_result == VK_SUBOPTIMAL_KHR) {
+                mpv.render(subsurface.swapchainImages()[sub_image_idx],
+                          subsurface.swapchainViews()[sub_image_idx],
+                          subsurface.width(), subsurface.height(),
+                          subsurface.swapchainFormat());
+
+                VkPresentInfoKHR sub_present{};
+                sub_present.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+                VkSwapchainKHR sub_swapchain = subsurface.swapchain();
+                sub_present.swapchainCount = 1;
+                sub_present.pSwapchains = &sub_swapchain;
+                sub_present.pImageIndices = &sub_image_idx;
+                vkQueuePresentKHR(vk.queue(), &sub_present);
+                subsurface.commit();
+            }
+        } else if (has_video) {
+            // Fallback: mpv renders to main swapchain (SDR)
             mpv.render(vk.swapchainImages()[image_idx], vk.swapchainViews()[image_idx],
                       vk.swapchainExtent().width, vk.swapchainExtent().height, vk.swapchainFormat());
-        } else {
+        }
+
+        // Clear main swapchain if using subsurface for video or no video
+        if (!has_video || has_subsurface) {
             // Clear to black when no video
             VkImageMemoryBarrier barrier{};
             barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -433,7 +480,9 @@ int main(int argc, char* argv[]) {
             vkCmdPipelineBarrier(cmd_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                                  0, 0, nullptr, 0, nullptr, 1, &barrier);
 
-            VkClearColorValue clear_color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+            // Transparent when using subsurface (so video shows through), opaque black otherwise
+            float alpha = (has_video && has_subsurface) ? 0.0f : 1.0f;
+            VkClearColorValue clear_color = {{0.0f, 0.0f, 0.0f, alpha}};
             VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
             vkCmdClearColorImage(cmd_buffer, vk.swapchainImages()[image_idx],
                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_color, 1, &range);
@@ -483,6 +532,9 @@ int main(int argc, char* argv[]) {
             SDL_GetWindowSize(window, &current_width, &current_height);
             vkDeviceWaitIdle(vk.device());
             vk.recreateSwapchain(current_width, current_height);
+            if (has_subsurface) {
+                subsurface.recreateSwapchain(current_width, current_height);
+            }
             compositor.resize(current_width, current_height);
         }
     }
@@ -495,6 +547,9 @@ int main(int argc, char* argv[]) {
 
     mpv.cleanup();
     compositor.cleanup();
+    if (has_subsurface) {
+        subsurface.cleanup();
+    }
     vk.cleanup();
 
     CefShutdown();

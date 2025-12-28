@@ -8,6 +8,7 @@ const char* VulkanContext::device_extensions_[] = {
     VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME,
     VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
     VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+    VK_EXT_HDR_METADATA_EXTENSION_NAME,
 };
 
 const int VulkanContext::device_extension_count_ = sizeof(device_extensions_) / sizeof(device_extensions_[0]);
@@ -33,6 +34,9 @@ bool VulkanContext::createInstance(SDL_Window* window) {
     SDL_Vulkan_GetInstanceExtensions(window, &ext_count, nullptr);
     std::vector<const char*> extensions(ext_count);
     SDL_Vulkan_GetInstanceExtensions(window, &ext_count, extensions.data());
+
+    // Add HDR colorspace extension
+    extensions.push_back(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
 
     VkApplicationInfo app_info{};
     app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -158,16 +162,28 @@ bool VulkanContext::createSwapchain(int width, int height) {
 
     uint32_t format_count = 0;
     vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device_, surface_, &format_count, nullptr);
+    if (format_count == 0) {
+        std::cerr << "No surface formats available" << std::endl;
+        return false;
+    }
     std::vector<VkSurfaceFormatKHR> formats(format_count);
     vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device_, surface_, &format_count, formats.data());
 
-    // Prefer BGRA8 UNORM (mpv gpu-next needs storage support, SRGB doesn't have it)
+    // Debug: print available formats
+    std::cout << "Available surface formats:" << std::endl;
+    for (const auto& fmt : formats) {
+        std::cout << "  format=" << fmt.format << " colorSpace=" << fmt.colorSpace << std::endl;
+    }
+
+    // SDR for main window (CEF overlay) - mpv uses separate HDR subsurface
     swapchain_format_ = formats[0].format;
-    VkColorSpaceKHR color_space = formats[0].colorSpace;
+    swapchain_color_space_ = formats[0].colorSpace;
+    is_hdr_ = false;
+
     for (const auto& fmt : formats) {
         if (fmt.format == VK_FORMAT_B8G8R8A8_UNORM && fmt.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
             swapchain_format_ = fmt.format;
-            color_space = fmt.colorSpace;
+            swapchain_color_space_ = fmt.colorSpace;
             break;
         }
     }
@@ -186,13 +202,13 @@ bool VulkanContext::createSwapchain(int width, int height) {
     swapchain_info.surface = surface_;
     swapchain_info.minImageCount = image_count;
     swapchain_info.imageFormat = swapchain_format_;
-    swapchain_info.imageColorSpace = color_space;
+    swapchain_info.imageColorSpace = swapchain_color_space_;
     swapchain_info.imageExtent = swapchain_extent_;
     swapchain_info.imageArrayLayers = 1;
     swapchain_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
     swapchain_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     swapchain_info.preTransform = caps.currentTransform;
-    swapchain_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    swapchain_info.compositeAlpha = VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR;
     swapchain_info.presentMode = VK_PRESENT_MODE_FIFO_KHR;
     swapchain_info.clipped = VK_TRUE;
 
@@ -217,8 +233,43 @@ bool VulkanContext::createSwapchain(int width, int height) {
         vkCreateImageView(device_, &view_info, nullptr, &swapchain_views_[i]);
     }
 
-    std::cout << "Swapchain created: " << swapchain_extent_.width << "x" << swapchain_extent_.height << std::endl;
+    std::cout << "Swapchain created: " << swapchain_extent_.width << "x" << swapchain_extent_.height
+              << " (HDR: " << (is_hdr_ ? "yes" : "no") << ")" << std::endl;
+
+    if (is_hdr_) {
+        setHdrMetadata();
+    }
+
     return true;
+}
+
+void VulkanContext::setHdrMetadata() {
+    auto vkSetHdrMetadataEXT = reinterpret_cast<PFN_vkSetHdrMetadataEXT>(
+        vkGetDeviceProcAddr(device_, "vkSetHdrMetadataEXT"));
+    if (!vkSetHdrMetadataEXT) {
+        std::cerr << "vkSetHdrMetadataEXT not available" << std::endl;
+        return;
+    }
+
+    VkHdrMetadataEXT hdr_metadata{};
+    hdr_metadata.sType = VK_STRUCTURE_TYPE_HDR_METADATA_EXT;
+
+    // BT.2020 primaries
+    hdr_metadata.displayPrimaryRed = {0.708f, 0.292f};
+    hdr_metadata.displayPrimaryGreen = {0.170f, 0.797f};
+    hdr_metadata.displayPrimaryBlue = {0.131f, 0.046f};
+    hdr_metadata.whitePoint = {0.3127f, 0.3290f};  // D65
+
+    // Luminance range
+    hdr_metadata.maxLuminance = 1000.0f;
+    hdr_metadata.minLuminance = 0.001f;
+
+    // Content light level
+    hdr_metadata.maxContentLightLevel = 1000.0f;
+    hdr_metadata.maxFrameAverageLightLevel = 200.0f;
+
+    vkSetHdrMetadataEXT(device_, 1, &swapchain_, &hdr_metadata);
+    std::cout << "HDR metadata set" << std::endl;
 }
 
 bool VulkanContext::recreateSwapchain(int width, int height) {

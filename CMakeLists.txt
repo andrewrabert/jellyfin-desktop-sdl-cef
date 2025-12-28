@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.19)
-project(jellyfin-desktop-cef LANGUAGES CXX)
+project(jellyfin-desktop-cef LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -57,6 +57,10 @@ endif()
 set(MPV_INCLUDE_DIRS "${MPV_SOURCE_DIR}/include")
 set(MPV_LIBRARIES "${MPV_BUILD_DIR}/libmpv.so")
 
+# Wayland
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(WAYLAND REQUIRED wayland-client)
+
 add_executable(jellyfin-desktop
     src/main.cpp
     src/cef_app.cpp
@@ -64,6 +68,8 @@ add_executable(jellyfin-desktop
     src/vulkan_context.cpp
     src/vulkan_compositor.cpp
     src/mpv_player_vk.cpp
+    src/wayland_subsurface.cpp
+    src/wayland-protocols/color-management-v1-code.c
     src/settings.cpp
 )
 
@@ -72,6 +78,7 @@ target_include_directories(jellyfin-desktop PRIVATE
     ${SDL2_INCLUDE_DIRS}
     ${MPV_INCLUDE_DIRS}
     ${Vulkan_INCLUDE_DIRS}
+    ${WAYLAND_INCLUDE_DIRS}
     ${CMAKE_SOURCE_DIR}/src
 )
 
@@ -79,6 +86,7 @@ target_link_libraries(jellyfin-desktop PRIVATE
     ${CEF_LIBRARIES}
     ${SDL2_LIBRARIES}
     ${MPV_LIBRARIES}
+    ${WAYLAND_LIBRARIES}
     Vulkan::Vulkan
 )
 

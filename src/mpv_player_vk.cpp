@@ -30,8 +30,9 @@ void MpvPlayerVk::onMpvRedraw(void* ctx) {
     }
 }
 
-bool MpvPlayerVk::init(VulkanContext* vk) {
+bool MpvPlayerVk::init(VulkanContext* vk, WaylandSubsurface* subsurface) {
     vk_ = vk;
+    subsurface_ = subsurface;
 
     std::setlocale(LC_NUMERIC, "C");
 
@@ -46,6 +47,16 @@ bool MpvPlayerVk::init(VulkanContext* vk) {
     mpv_set_option_string(mpv_, "keep-open", "yes");
     mpv_set_option_string(mpv_, "terminal", "yes");
     mpv_set_option_string(mpv_, "msg-level", "all=v");
+
+    // HDR output configuration (before initialize for mpv options)
+    bool use_hdr = subsurface_ && subsurface_->isHdr();
+    if (use_hdr) {
+        mpv_set_option_string(mpv_, "target-prim", "bt.2020");
+        mpv_set_option_string(mpv_, "target-trc", "pq");
+        double peak = 1000.0;
+        mpv_set_option(mpv_, "target-peak", MPV_FORMAT_DOUBLE, &peak);
+        std::cout << "mpv HDR output enabled (bt.2020/pq/1000 nits)" << std::endl;
+    }
 
     if (mpv_initialize(mpv_) < 0) {
         std::cerr << "mpv_initialize failed" << std::endl;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vulkan_context.h"
+#include "wayland_subsurface.h"
 #include <string>
 #include <functional>
 #include <atomic>
@@ -15,7 +16,7 @@ public:
     MpvPlayerVk();
     ~MpvPlayerVk();
 
-    bool init(VulkanContext* vk);
+    bool init(VulkanContext* vk, WaylandSubsurface* subsurface = nullptr);
     void cleanup();
     bool loadFile(const std::string& path);
 
@@ -40,10 +41,14 @@ public:
     bool needsRedraw() const { return needs_redraw_.load(); }
     void clearRedrawFlag() { needs_redraw_ = false; }
 
+    bool isHdr() const { return subsurface_ && subsurface_->isHdr(); }
+    WaylandSubsurface* subsurface() const { return subsurface_; }
+
 private:
     static void onMpvRedraw(void* ctx);
 
     VulkanContext* vk_ = nullptr;
+    WaylandSubsurface* subsurface_ = nullptr;
     mpv_handle* mpv_ = nullptr;
     mpv_render_context* render_ctx_ = nullptr;
 

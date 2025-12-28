@@ -31,6 +31,8 @@ public:
     const char* const* deviceExtensions() const { return device_extensions_; }
     int deviceExtensionCount() const { return device_extension_count_; }
 
+    bool isHdr() const { return is_hdr_; }
+
     // Helpers
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
     VkCommandBuffer beginSingleTimeCommands();
@@ -43,6 +45,7 @@ private:
     bool createDevice();
     bool createCommandPool();
     void destroySwapchain();
+    void setHdrMetadata();
 
     VkInstance instance_ = VK_NULL_HANDLE;
     VkSurfaceKHR surface_ = VK_NULL_HANDLE;
@@ -52,8 +55,10 @@ private:
     uint32_t queue_family_ = 0;
     VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
     VkFormat swapchain_format_ = VK_FORMAT_B8G8R8A8_UNORM;
+    VkColorSpaceKHR swapchain_color_space_ = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
     VkExtent2D swapchain_extent_ = {0, 0};
     VkCommandPool command_pool_ = VK_NULL_HANDLE;
+    bool is_hdr_ = false;
 
     std::vector<VkImage> swapchain_images_;
     std::vector<VkImageView> swapchain_views_;
