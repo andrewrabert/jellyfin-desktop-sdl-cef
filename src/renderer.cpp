@@ -17,8 +17,10 @@ static const char* fragment_shader_source = R"(
 in vec2 TexCoord;
 out vec4 FragColor;
 uniform sampler2D textureSampler;
+uniform float alpha;
 void main() {
-    FragColor = texture(textureSampler, TexCoord);
+    vec4 color = texture(textureSampler, TexCoord);
+    FragColor = vec4(color.rgb, color.a * alpha);
 }
 )";
 
@@ -27,7 +29,7 @@ Renderer::Renderer() = default;
 Renderer::~Renderer() {
     if (vao_) glDeleteVertexArrays(1, &vao_);
     if (vbo_) glDeleteBuffers(1, &vbo_);
-    if (texture_) glDeleteTextures(1, &texture_);
+    if (overlay_texture_) glDeleteTextures(1, &overlay_texture_);
     if (shader_program_) glDeleteProgram(shader_program_);
 }
 
@@ -37,6 +39,8 @@ bool Renderer::init(int width, int height) {
 
     shader_program_ = createShaderProgram();
     if (!shader_program_) return false;
+
+    alpha_uniform_ = glGetUniformLocation(shader_program_, "alpha");
 
     // Fullscreen quad (position + texcoord)
     float vertices[] = {
@@ -61,9 +65,9 @@ bool Renderer::init(int width, int height) {
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
-    // Create texture
-    glGenTextures(1, &texture_);
-    glBindTexture(GL_TEXTURE_2D, texture_);
+    // Create overlay texture (for CEF)
+    glGenTextures(1, &overlay_texture_);
+    glBindTexture(GL_TEXTURE_2D, overlay_texture_);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
@@ -72,8 +76,8 @@ bool Renderer::init(int width, int height) {
     return true;
 }
 
-void Renderer::updateTexture(const void* buffer, int width, int height) {
-    glBindTexture(GL_TEXTURE_2D, texture_);
+void Renderer::updateOverlayTexture(const void* buffer, int width, int height) {
+    glBindTexture(GL_TEXTURE_2D, overlay_texture_);
     if (width != tex_width_ || height != tex_height_) {
         tex_width_ = width;
         tex_height_ = height;
@@ -83,12 +87,33 @@ void Renderer::updateTexture(const void* buffer, int width, int height) {
     }
 }
 
-void Renderer::render() {
+void Renderer::renderVideo(GLuint video_texture) {
+    glDisable(GL_BLEND);
+
     glUseProgram(shader_program_);
+    glUniform1f(alpha_uniform_, 1.0f);  // Opaque
+
     glBindVertexArray(vao_);
-    glBindTexture(GL_TEXTURE_2D, texture_);
+    glBindTexture(GL_TEXTURE_2D, video_texture);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glBindVertexArray(0);
+}
+
+void Renderer::renderOverlay(float alpha) {
+    if (alpha <= 0.0f) return;
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    glUseProgram(shader_program_);
+    glUniform1f(alpha_uniform_, alpha);
+
+    glBindVertexArray(vao_);
+    glBindTexture(GL_TEXTURE_2D, overlay_texture_);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+
+    glDisable(GL_BLEND);
 }
 
 GLuint Renderer::compileShader(GLenum type, const char* source) {

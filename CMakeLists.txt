@@ -33,22 +33,29 @@ find_package(OpenGL REQUIRED)
 # GLEW
 find_package(GLEW REQUIRED)
 
+# libmpv
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(MPV REQUIRED mpv)
+
 add_executable(jellyfin-desktop
     src/main.cpp
     src/renderer.cpp
     src/cef_app.cpp
     src/cef_client.cpp
+    src/mpv_player.cpp
 )
 
 target_include_directories(jellyfin-desktop PRIVATE
     ${CEF_INCLUDE_DIRS}
     ${SDL2_INCLUDE_DIRS}
+    ${MPV_INCLUDE_DIRS}
     ${CMAKE_SOURCE_DIR}/src
 )
 
 target_link_libraries(jellyfin-desktop PRIVATE
     ${CEF_LIBRARIES}
     ${SDL2_LIBRARIES}
+    ${MPV_LIBRARIES}
     OpenGL::GL
     GLEW::GLEW
 )

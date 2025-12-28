@@ -3,23 +3,43 @@
 <head>
     <meta charset="UTF-8">
     <style>
-        body {
+        * {
             margin: 0;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            padding: 0;
+            box-sizing: border-box;
+        }
+        html, body {
+            width: 100%;
+            height: 100%;
+            background: transparent;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            overflow: hidden;
+        }
+        .overlay {
+            position: fixed;
+            bottom: 40px;
+            left: 40px;
+            right: 40px;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            border-radius: 12px;
+            color: white;
         }
         h1 {
+            font-size: 1.5rem;
+            margin-bottom: 8px;
             color: #00d9ff;
-            font-size: 4rem;
-            text-shadow: 0 0 20px rgba(0, 217, 255, 0.5);
+        }
+        p {
+            font-size: 0.9rem;
+            opacity: 0.8;
         }
     </style>
 </head>
 <body>
-    <h1>Hello, Jellyfin!</h1>
+    <div class="overlay">
+        <h1>Jellyfin Desktop</h1>
+        <p>Move mouse or press keys to show/hide overlay</p>
+    </div>
 </body>
 </html>

@@ -7,14 +7,21 @@
 #include <vector>
 #include <cstring>
 #include <mutex>
+#include <chrono>
+#include <algorithm>
 
 #include "include/cef_app.h"
 #include "include/cef_browser.h"
 #include "include/cef_command_line.h"
 
 #include "renderer.h"
+#include "mpv_player.h"
 #include "cef_app.h"
 #include "cef_client.h"
+
+// Fade constants
+constexpr float FADE_DURATION_SEC = 0.3f;  // 300ms fade
+constexpr float IDLE_TIMEOUT_SEC = 5.0f;   // 5 seconds before fade starts
 
 int main(int argc, char* argv[]) {
     // CEF initialization
@@ -26,6 +33,21 @@ int main(int argc, char* argv[]) {
     int exit_code = CefExecuteProcess(main_args, app, nullptr);
     if (exit_code >= 0) {
         return exit_code;
+    }
+
+    // Parse video path argument
+    std::string video_path;
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        // Skip CEF flags
+        if (arg.rfind("--", 0) == 0) continue;
+        video_path = arg;
+        break;
+    }
+
+    if (video_path.empty()) {
+        std::cerr << "Usage: " << argv[0] << " <video-file>" << std::endl;
+        return 1;
     }
 
     // SDL initialization
@@ -86,6 +108,26 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Initialize mpv player
+    MpvPlayer mpv;
+    if (!mpv.init(width, height)) {
+        std::cerr << "MpvPlayer init failed" << std::endl;
+        SDL_GL_DeleteContext(gl_context);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+
+    if (!mpv.loadFile(video_path)) {
+        std::cerr << "Failed to load: " << video_path << std::endl;
+        SDL_GL_DeleteContext(gl_context);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+
+    std::cout << "Playing: " << video_path << std::endl;
+
     // CEF settings
     CefSettings settings;
     settings.windowless_rendering_enabled = true;
@@ -127,6 +169,7 @@ int main(int argc, char* argv[]) {
     window_info.SetAsWindowless(0);
 
     CefBrowserSettings browser_settings;
+    browser_settings.background_color = 0;  // Transparent background
 
     // Load local HTML file
     std::string html_path = "file://" + (exe_path / "resources" / "index.html").string();
@@ -134,27 +177,67 @@ int main(int argc, char* argv[]) {
 
     CefBrowserHost::CreateBrowser(window_info, client, html_path, browser_settings, nullptr, nullptr);
 
+    // Activity tracking state
+    using Clock = std::chrono::steady_clock;
+    auto last_activity = Clock::now();
+    float overlay_alpha = 1.0f;  // Start fully visible
+
     // Main loop
     bool running = true;
     while (running && !client->isClosed()) {
+        auto now = Clock::now();
+        bool activity_this_frame = false;
+
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) running = false;
             if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) running = false;
+
+            // Track activity
+            if (event.type == SDL_MOUSEMOTION ||
+                event.type == SDL_MOUSEBUTTONDOWN ||
+                event.type == SDL_MOUSEBUTTONUP ||
+                event.type == SDL_KEYDOWN ||
+                event.type == SDL_KEYUP) {
+                activity_this_frame = true;
+            }
         }
+
+        if (activity_this_frame) {
+            last_activity = now;
+        }
+
+        // Calculate fade
+        float idle_sec = std::chrono::duration<float>(now - last_activity).count();
+        float target_alpha;
+        if (idle_sec < IDLE_TIMEOUT_SEC) {
+            target_alpha = 1.0f;  // Visible
+        } else {
+            // Fade out over FADE_DURATION_SEC after idle timeout
+            float fade_progress = (idle_sec - IDLE_TIMEOUT_SEC) / FADE_DURATION_SEC;
+            target_alpha = std::max(0.0f, 1.0f - fade_progress);
+        }
+        overlay_alpha = target_alpha;
 
         CefDoMessageLoopWork();
 
+        // Update CEF texture
         if (texture_dirty) {
             std::lock_guard<std::mutex> lock(buffer_mutex);
             if (!paint_buffer_copy.empty()) {
-                renderer.updateTexture(paint_buffer_copy.data(), paint_width, paint_height);
+                renderer.updateOverlayTexture(paint_buffer_copy.data(), paint_width, paint_height);
             }
             texture_dirty = false;
         }
 
+        // Render mpv frame
+        mpv.render();
+
+        // Composite: video background, then overlay
         glClear(GL_COLOR_BUFFER_BIT);
-        renderer.render();
+        renderer.renderVideo(mpv.getTexture());
+        renderer.renderOverlay(overlay_alpha);
+
         SDL_GL_SwapWindow(window);
     }
 
