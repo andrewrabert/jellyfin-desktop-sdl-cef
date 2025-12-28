@@ -19,6 +19,7 @@
 #include "mpv_player_vk.h"
 #include "cef_app.h"
 #include "cef_client.h"
+#include "settings.h"
 
 // Fade constants
 constexpr float FADE_DURATION_SEC = 0.3f;
@@ -105,6 +106,9 @@ int main(int argc, char* argv[]) {
         SDL_Quit();
         return 1;
     }
+
+    // Load settings
+    Settings::instance().load();
 
     // CEF settings
     CefSettings settings;

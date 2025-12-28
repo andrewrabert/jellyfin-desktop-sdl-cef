@@ -1,4 +1,5 @@
 #include "cef_app.h"
+#include "settings.h"
 #include "include/cef_browser.h"
 #include "include/cef_command_line.h"
 #include "include/cef_frame.h"
@@ -59,6 +60,9 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
                            CefRefPtr<CefV8Context> context) {
     std::cout << "[Native] OnContextCreated: " << frame->GetURL().ToString() << std::endl;
 
+    // Load settings (renderer process is separate from browser process)
+    Settings::instance().load();
+
     CefRefPtr<CefV8Value> window = context->GetGlobal();
     CefRefPtr<NativeV8Handler> handler = new NativeV8Handler(browser);
 
@@ -71,6 +75,7 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
     jmpNative->SetValue("playerSeek", CefV8Value::CreateFunction("playerSeek", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("playerSetVolume", CefV8Value::CreateFunction("playerSetVolume", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("playerSetMuted", CefV8Value::CreateFunction("playerSetMuted", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
+    jmpNative->SetValue("saveServerUrl", CefV8Value::CreateFunction("saveServerUrl", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     window->SetValue("jmpNative", jmpNative, V8_PROPERTY_ATTRIBUTE_READONLY);
 
     // Inject the JavaScript shim that creates window.api, window.NativeShell, etc.
@@ -112,7 +117,7 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
             { key: 'video', order: 2 }
         ],
         settings: {
-            main: { enableMPV: true, fullscreen: false, userWebClient: '' },
+            main: { enableMPV: true, fullscreen: false, userWebClient: '__SERVER_URL__' },
             audio: { channels: '2.0' },
             video: {
                 force_transcode_dovi: false,
@@ -385,7 +390,14 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
 })();
 )JS";
 
-    frame->ExecuteJavaScript(native_shim, frame->GetURL(), 0);
+    // Replace placeholder with saved server URL
+    std::string shim_str(native_shim);
+    std::string placeholder = "__SERVER_URL__";
+    size_t pos = shim_str.find(placeholder);
+    if (pos != std::string::npos) {
+        shim_str.replace(pos, placeholder.length(), Settings::instance().serverUrl());
+    }
+    frame->ExecuteJavaScript(shim_str, frame->GetURL(), 0);
 
     // Now inject the mpvVideoPlayer plugin
     const char* mpv_video_player = R"JS(
@@ -785,6 +797,17 @@ bool NativeV8Handler::Execute(const CefString& name,
             std::cout << "[V8] playerSetMuted: " << muted << std::endl;
             CefRefPtr<CefProcessMessage> msg = CefProcessMessage::Create("playerSetMuted");
             msg->GetArgumentList()->SetBool(0, muted);
+            browser_->GetMainFrame()->SendProcessMessage(PID_BROWSER, msg);
+        }
+        return true;
+    }
+
+    if (name == "saveServerUrl") {
+        if (arguments.size() >= 1 && arguments[0]->IsString()) {
+            std::string url = arguments[0]->GetStringValue().ToString();
+            std::cout << "[V8] saveServerUrl: " << url << std::endl;
+            CefRefPtr<CefProcessMessage> msg = CefProcessMessage::Create("saveServerUrl");
+            msg->GetArgumentList()->SetString(0, url);
             browser_->GetMainFrame()->SendProcessMessage(PID_BROWSER, msg);
         }
         return true;

@@ -10,8 +10,11 @@ async function tryConnect(server) {
         console.log("Server connectivity check passed");
         console.log("Resolved URL:", resolvedUrl);
 
-        // Save original URL but navigate to fully-resolved redirect
+        // Save server URL persistently
         window.jmpInfo.settings.main.userWebClient = server;
+        if (window.jmpNative && window.jmpNative.saveServerUrl) {
+            window.jmpNative.saveServerUrl(server);
+        }
 
         // Navigation will clean up handlers, but do it explicitly
         window.location = resolvedUrl;

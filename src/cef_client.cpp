@@ -1,4 +1,5 @@
 #include "cef_client.h"
+#include "settings.h"
 #include <iostream>
 
 Client::Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg)
@@ -57,6 +58,12 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
     } else if (name == "playerSetMuted") {
         bool muted = args->GetBool(0);
         on_player_msg_("mute", "", muted ? 1 : 0);
+        return true;
+    } else if (name == "saveServerUrl") {
+        std::string url = args->GetString(0).ToString();
+        std::cout << "[IPC] Saving server URL: " << url << std::endl;
+        Settings::instance().setServerUrl(url);
+        Settings::instance().save();
         return true;
     }
 

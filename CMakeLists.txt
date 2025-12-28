@@ -64,6 +64,7 @@ add_executable(jellyfin-desktop
     src/vulkan_context.cpp
     src/vulkan_compositor.cpp
     src/mpv_player_vk.cpp
+    src/settings.cpp
 )
 
 target_include_directories(jellyfin-desktop PRIVATE
