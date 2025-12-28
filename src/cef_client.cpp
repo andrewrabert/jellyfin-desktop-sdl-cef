@@ -169,6 +169,14 @@ void Client::sendKeyEvent(int key, bool down, int modifiers) {
     event.modifiers = modifiers;
     event.type = down ? KEYEVENT_KEYDOWN : KEYEVENT_KEYUP;
     browser_->GetHost()->SendKeyEvent(event);
+
+    // Send CHAR event for Enter key to trigger form submission
+    if (down && key == 0x0D) {
+        event.type = KEYEVENT_CHAR;
+        event.character = '\r';
+        event.unmodified_character = '\r';
+        browser_->GetHost()->SendKeyEvent(event);
+    }
 }
 
 void Client::sendChar(int charCode, int modifiers) {
