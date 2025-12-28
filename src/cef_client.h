@@ -27,11 +27,21 @@ public:
 
     bool isClosed() const { return is_closed_; }
 
+    // Input forwarding
+    void sendMouseMove(int x, int y, int modifiers);
+    void sendMouseClick(int x, int y, bool down, int button, int clickCount, int modifiers);
+    void sendMouseWheel(int x, int y, int deltaX, int deltaY, int modifiers);
+    void sendKeyEvent(int key, bool down, int modifiers);
+    void sendChar(int charCode, int modifiers);
+    void sendFocus(bool focused);
+    void resize(int width, int height);
+
 private:
     int width_;
     int height_;
     PaintCallback on_paint_;
     std::atomic<bool> is_closed_ = false;
+    CefRefPtr<CefBrowser> browser_;
 
     IMPLEMENT_REFCOUNTING(Client);
     DISALLOW_COPY_AND_ASSIGN(Client);

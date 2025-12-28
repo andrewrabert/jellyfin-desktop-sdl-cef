@@ -17,10 +17,112 @@ void Client::OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
 }
 
 void Client::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
+    browser_ = browser;
     std::cout << "Browser created" << std::endl;
 }
 
 void Client::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
     std::cout << "Browser closing" << std::endl;
+    browser_ = nullptr;
     is_closed_ = true;
+}
+
+void Client::sendMouseMove(int x, int y, int modifiers) {
+    if (!browser_) return;
+    CefMouseEvent event;
+    event.x = x;
+    event.y = y;
+    event.modifiers = modifiers;
+    browser_->GetHost()->SendMouseMoveEvent(event, false);
+}
+
+void Client::sendMouseClick(int x, int y, bool down, int button, int clickCount, int modifiers) {
+    if (!browser_) return;
+    CefMouseEvent event;
+    event.x = x;
+    event.y = y;
+    event.modifiers = modifiers;
+
+    CefBrowserHost::MouseButtonType btn_type;
+    switch (button) {
+        case 1: btn_type = MBT_LEFT; break;
+        case 2: btn_type = MBT_MIDDLE; break;
+        case 3: btn_type = MBT_RIGHT; break;
+        default: btn_type = MBT_LEFT; break;
+    }
+
+    browser_->GetHost()->SendMouseClickEvent(event, btn_type, !down, clickCount);
+}
+
+// Map SDL keycodes to Windows virtual key codes
+static int sdlKeyToWindows(int sdlKey) {
+    switch (sdlKey) {
+        case 0x08: return 0x08;  // SDLK_BACKSPACE -> VK_BACK
+        case 0x09: return 0x09;  // SDLK_TAB -> VK_TAB
+        case 0x0D: return 0x0D;  // SDLK_RETURN -> VK_RETURN
+        case 0x1B: return 0x1B;  // SDLK_ESCAPE -> VK_ESCAPE
+        case 0x7F: return 0x2E;  // SDLK_DELETE -> VK_DELETE
+        case 0x40000050: return 0x25;  // SDLK_LEFT -> VK_LEFT
+        case 0x4000004F: return 0x27;  // SDLK_RIGHT -> VK_RIGHT
+        case 0x40000052: return 0x26;  // SDLK_UP -> VK_UP
+        case 0x40000051: return 0x28;  // SDLK_DOWN -> VK_DOWN
+        case 0x4000004A: return 0x24;  // SDLK_HOME -> VK_HOME
+        case 0x4000004D: return 0x23;  // SDLK_END -> VK_END
+        case 0x4000004B: return 0x21;  // SDLK_PAGEUP -> VK_PRIOR
+        case 0x4000004E: return 0x22;  // SDLK_PAGEDOWN -> VK_NEXT
+        case 0x4000003A: return 0x74;  // SDLK_F5 -> VK_F5
+        case 0x40000044: return 0x7A;  // SDLK_F11 -> VK_F11
+        // Letters for Ctrl+key combos (SDL uses lowercase)
+        case 'a': return 'A';
+        case 'c': return 'C';
+        case 'v': return 'V';
+        case 'x': return 'X';
+        case 'z': return 'Z';
+        case 'y': return 'Y';
+        default: return sdlKey;
+    }
+}
+
+void Client::sendKeyEvent(int key, bool down, int modifiers) {
+    if (!browser_) return;
+    CefKeyEvent event;
+    event.windows_key_code = sdlKeyToWindows(key);
+    event.native_key_code = key;
+    event.modifiers = modifiers;
+    event.type = down ? KEYEVENT_KEYDOWN : KEYEVENT_KEYUP;
+    browser_->GetHost()->SendKeyEvent(event);
+}
+
+void Client::sendChar(int charCode, int modifiers) {
+    if (!browser_) return;
+    CefKeyEvent event;
+    event.windows_key_code = charCode;
+    event.character = charCode;
+    event.unmodified_character = charCode;
+    event.type = KEYEVENT_CHAR;
+    event.modifiers = modifiers;
+    browser_->GetHost()->SendKeyEvent(event);
+}
+
+void Client::sendMouseWheel(int x, int y, int deltaX, int deltaY, int modifiers) {
+    if (!browser_) return;
+    CefMouseEvent event;
+    event.x = x;
+    event.y = y;
+    event.modifiers = modifiers;
+    // CEF expects pixels, SDL gives discrete steps - scale up
+    browser_->GetHost()->SendMouseWheelEvent(event, deltaX * 120, deltaY * 120);
+}
+
+void Client::sendFocus(bool focused) {
+    if (!browser_) return;
+    browser_->GetHost()->SetFocus(focused);
+}
+
+void Client::resize(int width, int height) {
+    width_ = width;
+    height_ = height;
+    if (browser_) {
+        browser_->GetHost()->WasResized();
+    }
 }

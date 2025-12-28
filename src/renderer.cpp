@@ -76,6 +76,13 @@ bool Renderer::init(int width, int height) {
     return true;
 }
 
+void Renderer::resize(int width, int height) {
+    tex_width_ = width;
+    tex_height_ = height;
+    glBindTexture(GL_TEXTURE_2D, overlay_texture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
+}
+
 void Renderer::updateOverlayTexture(const void* buffer, int width, int height) {
     glBindTexture(GL_TEXTURE_2D, overlay_texture_);
     if (width != tex_width_ || height != tex_height_) {

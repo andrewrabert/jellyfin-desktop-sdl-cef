@@ -9,6 +9,7 @@ public:
     ~Renderer();
 
     bool init(int width, int height);
+    void resize(int width, int height);
 
     // Update CEF overlay texture
     void updateOverlayTexture(const void* buffer, int width, int height);

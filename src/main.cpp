@@ -23,6 +23,19 @@
 constexpr float FADE_DURATION_SEC = 0.3f;  // 300ms fade
 constexpr float IDLE_TIMEOUT_SEC = 5.0f;   // 5 seconds before fade starts
 
+// Double/triple click detection
+constexpr int MULTI_CLICK_DISTANCE = 4;    // Max pixels between clicks
+constexpr Uint32 MULTI_CLICK_TIME = 500;   // Max ms between clicks
+
+// Convert SDL modifier state to CEF modifier flags
+int sdlModsToCef(Uint16 sdlMods) {
+    int cef = 0;
+    if (sdlMods & KMOD_SHIFT) cef |= (1 << 1);  // EVENTFLAG_SHIFT_DOWN
+    if (sdlMods & KMOD_CTRL)  cef |= (1 << 2);  // EVENTFLAG_CONTROL_DOWN
+    if (sdlMods & KMOD_ALT)   cef |= (1 << 3);  // EVENTFLAG_ALT_DOWN
+    return cef;
+}
+
 int main(int argc, char* argv[]) {
     // CEF initialization
     CefMainArgs main_args(argc, argv);
@@ -35,7 +48,7 @@ int main(int argc, char* argv[]) {
         return exit_code;
     }
 
-    // Parse video path argument
+    // Parse optional video path argument
     std::string video_path;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -43,11 +56,6 @@ int main(int argc, char* argv[]) {
         if (arg.rfind("--", 0) == 0) continue;
         video_path = arg;
         break;
-    }
-
-    if (video_path.empty()) {
-        std::cerr << "Usage: " << argv[0] << " <video-file>" << std::endl;
-        return 1;
     }
 
     // SDL initialization
@@ -67,7 +75,7 @@ int main(int argc, char* argv[]) {
         "Jellyfin Desktop",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         width, height,
-        SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN
+        SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
     );
 
     if (!window) {
@@ -83,6 +91,9 @@ int main(int argc, char* argv[]) {
         SDL_Quit();
         return 1;
     }
+
+    // Enable text input for keyboard events
+    SDL_StartTextInput();
 
     // GLEW initialization
     glewExperimental = GL_TRUE;
@@ -108,25 +119,29 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Initialize mpv player
+    // Initialize mpv player (optional - only if video path provided)
     MpvPlayer mpv;
-    if (!mpv.init(width, height)) {
-        std::cerr << "MpvPlayer init failed" << std::endl;
-        SDL_GL_DeleteContext(gl_context);
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
-    }
+    bool has_video = false;
+    if (!video_path.empty()) {
+        if (!mpv.init(width, height)) {
+            std::cerr << "MpvPlayer init failed" << std::endl;
+            SDL_GL_DeleteContext(gl_context);
+            SDL_DestroyWindow(window);
+            SDL_Quit();
+            return 1;
+        }
 
-    if (!mpv.loadFile(video_path)) {
-        std::cerr << "Failed to load: " << video_path << std::endl;
-        SDL_GL_DeleteContext(gl_context);
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
-    }
+        if (!mpv.loadFile(video_path)) {
+            std::cerr << "Failed to load: " << video_path << std::endl;
+            SDL_GL_DeleteContext(gl_context);
+            SDL_DestroyWindow(window);
+            SDL_Quit();
+            return 1;
+        }
 
-    std::cout << "Playing: " << video_path << std::endl;
+        std::cout << "Playing: " << video_path << std::endl;
+        has_video = true;
+    }
 
     // CEF settings
     CefSettings settings;
@@ -182,11 +197,29 @@ int main(int argc, char* argv[]) {
     auto last_activity = Clock::now();
     float overlay_alpha = 1.0f;  // Start fully visible
 
+    // Mouse position tracking for scroll events
+    int mouse_x = 0, mouse_y = 0;
+
+    // Multi-click tracking
+    Uint32 last_click_time = 0;
+    int last_click_x = 0, last_click_y = 0;
+    int last_click_button = 0;
+    int click_count = 0;
+
+    // Set initial focus
+    bool focus_set = false;
+
     // Main loop
     bool running = true;
     while (running && !client->isClosed()) {
         auto now = Clock::now();
         bool activity_this_frame = false;
+
+        // Set focus once browser is ready
+        if (!focus_set) {
+            client->sendFocus(true);
+            focus_set = true;
+        }
 
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
@@ -197,9 +230,82 @@ int main(int argc, char* argv[]) {
             if (event.type == SDL_MOUSEMOTION ||
                 event.type == SDL_MOUSEBUTTONDOWN ||
                 event.type == SDL_MOUSEBUTTONUP ||
+                event.type == SDL_MOUSEWHEEL ||
                 event.type == SDL_KEYDOWN ||
                 event.type == SDL_KEYUP) {
                 activity_this_frame = true;
+            }
+
+            // Get current modifier state
+            int mods = sdlModsToCef(SDL_GetModState());
+
+            // Forward input to CEF
+            if (event.type == SDL_MOUSEMOTION) {
+                mouse_x = event.motion.x;
+                mouse_y = event.motion.y;
+                client->sendMouseMove(mouse_x, mouse_y, mods);
+            } else if (event.type == SDL_MOUSEBUTTONDOWN) {
+                int x = event.button.x;
+                int y = event.button.y;
+                int btn = event.button.button;
+                Uint32 now_ticks = SDL_GetTicks();
+
+                // Detect multi-click
+                int dx = x - last_click_x;
+                int dy = y - last_click_y;
+                bool same_spot = (dx * dx + dy * dy) <= (MULTI_CLICK_DISTANCE * MULTI_CLICK_DISTANCE);
+                bool same_button = (btn == last_click_button);
+                bool in_time = (now_ticks - last_click_time) <= MULTI_CLICK_TIME;
+
+                if (same_spot && same_button && in_time) {
+                    click_count = (click_count % 3) + 1;  // Cycle 1 -> 2 -> 3 -> 1
+                } else {
+                    click_count = 1;
+                }
+
+                last_click_time = now_ticks;
+                last_click_x = x;
+                last_click_y = y;
+                last_click_button = btn;
+
+                client->sendMouseClick(x, y, true, btn, click_count, mods);
+            } else if (event.type == SDL_MOUSEBUTTONUP) {
+                client->sendMouseClick(event.button.x, event.button.y, false, event.button.button, click_count, mods);
+            } else if (event.type == SDL_MOUSEWHEEL) {
+                // SDL2: y > 0 = scroll up, y < 0 = scroll down
+                client->sendMouseWheel(mouse_x, mouse_y, event.wheel.x, event.wheel.y, mods);
+            } else if (event.type == SDL_WINDOWEVENT) {
+                if (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) {
+                    client->sendFocus(true);
+                } else if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+                    client->sendFocus(false);
+                } else if (event.window.event == SDL_WINDOWEVENT_RESIZED) {
+                    int new_w = event.window.data1;
+                    int new_h = event.window.data2;
+                    glViewport(0, 0, new_w, new_h);
+                    renderer.resize(new_w, new_h);
+                    client->resize(new_w, new_h);
+                }
+            } else if (event.type == SDL_KEYDOWN || event.type == SDL_KEYUP) {
+                bool down = (event.type == SDL_KEYDOWN);
+                SDL_Keycode key = event.key.keysym.sym;
+                // Forward control keys and modified keys (Ctrl+C, etc.)
+                bool is_control_key = (key == SDLK_BACKSPACE || key == SDLK_DELETE ||
+                    key == SDLK_RETURN || key == SDLK_ESCAPE ||
+                    key == SDLK_TAB || key == SDLK_LEFT || key == SDLK_RIGHT ||
+                    key == SDLK_UP || key == SDLK_DOWN || key == SDLK_HOME ||
+                    key == SDLK_END || key == SDLK_PAGEUP || key == SDLK_PAGEDOWN ||
+                    key == SDLK_F5 || key == SDLK_F11);
+                bool has_ctrl = (mods & (1 << 2)) != 0;
+                // Forward if control key OR if Ctrl is held (for Ctrl+C, etc.)
+                if (is_control_key || has_ctrl) {
+                    client->sendKeyEvent(key, down, mods);
+                }
+            } else if (event.type == SDL_TEXTINPUT) {
+                // UTF-8 text input - handles all printable characters
+                for (const char* c = event.text.text; *c; ++c) {
+                    client->sendChar(static_cast<unsigned char>(*c), mods);
+                }
             }
         }
 
@@ -230,13 +336,15 @@ int main(int argc, char* argv[]) {
             texture_dirty = false;
         }
 
-        // Render mpv frame
-        mpv.render();
-
-        // Composite: video background, then overlay
+        // Composite rendering
         glClear(GL_COLOR_BUFFER_BIT);
-        renderer.renderVideo(mpv.getTexture());
-        renderer.renderOverlay(overlay_alpha);
+        if (has_video) {
+            mpv.render();
+            renderer.renderVideo(mpv.getTexture());
+            renderer.renderOverlay(overlay_alpha);
+        } else {
+            renderer.renderOverlay(1.0f);  // Full opacity, no fade without video
+        }
 
         SDL_GL_SwapWindow(window);
     }

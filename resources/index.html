@@ -15,31 +15,89 @@
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             overflow: hidden;
         }
-        .overlay {
-            position: fixed;
-            bottom: 40px;
-            left: 40px;
-            right: 40px;
-            padding: 20px;
-            background: rgba(0, 0, 0, 0.7);
-            border-radius: 12px;
-            color: white;
+        .connect-page {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
         }
         h1 {
-            font-size: 1.5rem;
-            margin-bottom: 8px;
-            color: #00d9ff;
+            font-size: 2rem;
+            margin-bottom: 30px;
+            color: #00a4dc;
         }
-        p {
-            font-size: 0.9rem;
-            opacity: 0.8;
+        .input-group {
+            display: flex;
+            gap: 10px;
+            width: 100%;
+            max-width: 500px;
+            padding: 0 20px;
+        }
+        input[type="url"] {
+            flex: 1;
+            padding: 12px 16px;
+            font-size: 1rem;
+            border: 2px solid #333;
+            border-radius: 8px;
+            background: #1a1a1a;
+            color: white;
+            outline: none;
+        }
+        input[type="url"]:focus {
+            border-color: #00a4dc;
+        }
+        input[type="url"]::placeholder {
+            color: #666;
+        }
+        button {
+            padding: 12px 24px;
+            font-size: 1rem;
+            font-weight: 600;
+            border: none;
+            border-radius: 8px;
+            background: #00a4dc;
+            color: white;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        button:hover {
+            background: #0088b8;
+        }
+        button:active {
+            background: #006a91;
         }
     </style>
 </head>
 <body>
-    <div class="overlay">
-        <h1>Jellyfin Desktop</h1>
-        <p>Move mouse or press keys to show/hide overlay</p>
+    <div class="connect-page">
+        <h1>Jellyfin</h1>
+        <div class="input-group">
+            <input type="url" id="serverUrl" placeholder="http://localhost:8096" autofocus>
+            <button id="connectBtn">Connect</button>
+        </div>
     </div>
+    <script>
+        const urlInput = document.getElementById('serverUrl');
+        const connectBtn = document.getElementById('connectBtn');
+
+        function connect() {
+            let url = urlInput.value.trim();
+            if (!url) {
+                url = 'http://localhost:8096';
+            }
+            // Ensure URL has protocol
+            if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                url = 'http://' + url;
+            }
+            window.location.href = url;
+        }
+
+        connectBtn.addEventListener('click', connect);
+        urlInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') connect();
+        });
+    </script>
 </body>
 </html>
