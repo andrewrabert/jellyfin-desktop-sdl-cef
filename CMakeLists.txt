@@ -27,11 +27,8 @@ find_package(CEF REQUIRED)
 # SDL2
 find_package(SDL2 REQUIRED)
 
-# OpenGL
-find_package(OpenGL REQUIRED)
-
-# GLEW
-find_package(GLEW REQUIRED)
+# Vulkan
+find_package(Vulkan REQUIRED)
 
 # Build mpv from submodule using meson
 set(MPV_SOURCE_DIR "${CMAKE_SOURCE_DIR}/third_party/mpv")
@@ -62,16 +59,18 @@ set(MPV_LIBRARIES "${MPV_BUILD_DIR}/libmpv.so")
 
 add_executable(jellyfin-desktop
     src/main.cpp
-    src/renderer.cpp
     src/cef_app.cpp
     src/cef_client.cpp
-    src/mpv_player.cpp
+    src/vulkan_context.cpp
+    src/vulkan_compositor.cpp
+    src/mpv_player_vk.cpp
 )
 
 target_include_directories(jellyfin-desktop PRIVATE
     ${CEF_INCLUDE_DIRS}
     ${SDL2_INCLUDE_DIRS}
     ${MPV_INCLUDE_DIRS}
+    ${Vulkan_INCLUDE_DIRS}
     ${CMAKE_SOURCE_DIR}/src
 )
 
@@ -79,8 +78,7 @@ target_link_libraries(jellyfin-desktop PRIVATE
     ${CEF_LIBRARIES}
     ${SDL2_LIBRARIES}
     ${MPV_LIBRARIES}
-    OpenGL::GL
-    GLEW::GLEW
+    Vulkan::Vulkan
 )
 
 # Linux RPATH configuration for libcef.so loading

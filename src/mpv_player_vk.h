@@ -1,55 +1,52 @@
 #pragma once
 
-#include <GL/glew.h>
+#include "vulkan_context.h"
 #include <string>
 #include <functional>
+#include <atomic>
 
 struct mpv_handle;
 struct mpv_render_context;
 
-class MpvPlayer {
+class MpvPlayerVk {
 public:
     using RedrawCallback = std::function<void()>;
 
-    MpvPlayer();
-    ~MpvPlayer();
+    MpvPlayerVk();
+    ~MpvPlayerVk();
 
-    bool init(int width, int height);
+    bool init(VulkanContext* vk);
     bool loadFile(const std::string& path);
-    void render();
+
+    // Render to swapchain image
+    void render(VkImage image, VkImageView view, uint32_t width, uint32_t height, VkFormat format);
 
     // Playback control
     void stop();
     void pause();
     void play();
     void seek(double seconds);
-    void setVolume(int volume);  // 0-100
+    void setVolume(int volume);
     void setMuted(bool muted);
 
     // State queries
-    double getPosition() const;  // seconds
-    double getDuration() const;  // seconds
+    double getPosition() const;
+    double getDuration() const;
     bool isPaused() const;
     bool isPlaying() const { return playing_; }
 
     void setRedrawCallback(RedrawCallback cb) { redraw_callback_ = cb; }
-    GLuint getTexture() const { return texture_; }
-    bool needsRedraw() const { return needs_redraw_; }
+    bool needsRedraw() const { return needs_redraw_.load(); }
     void clearRedrawFlag() { needs_redraw_ = false; }
 
 private:
     static void onMpvRedraw(void* ctx);
-    static void* getProcAddress(void* ctx, const char* name);
 
+    VulkanContext* vk_ = nullptr;
     mpv_handle* mpv_ = nullptr;
-    mpv_render_context* mpv_gl_ = nullptr;
-
-    GLuint fbo_ = 0;
-    GLuint texture_ = 0;
-    int width_ = 0;
-    int height_ = 0;
+    mpv_render_context* render_ctx_ = nullptr;
 
     RedrawCallback redraw_callback_;
-    bool needs_redraw_ = false;
+    std::atomic<bool> needs_redraw_{false};
     bool playing_ = false;
 };
