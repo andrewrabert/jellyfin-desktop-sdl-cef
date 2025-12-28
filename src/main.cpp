@@ -142,6 +142,29 @@ int main(int argc, char* argv[]) {
     CefString(&settings.resources_dir_path).FromString(exe_path.string());
     CefString(&settings.locales_dir_path).FromString((exe_path / "locales").string());
 
+    // Set cache path (platform-specific)
+    std::filesystem::path cache_path;
+#ifdef _WIN32
+    if (const char* appdata = std::getenv("LOCALAPPDATA")) {
+        cache_path = std::filesystem::path(appdata) / "jellyfin-desktop-cef";
+    }
+#elif defined(__APPLE__)
+    if (const char* home = std::getenv("HOME")) {
+        cache_path = std::filesystem::path(home) / "Library" / "Caches" / "jellyfin-desktop-cef";
+    }
+#else
+    if (const char* xdg = std::getenv("XDG_CACHE_HOME")) {
+        cache_path = std::filesystem::path(xdg) / "jellyfin-desktop-cef";
+    } else if (const char* home = std::getenv("HOME")) {
+        cache_path = std::filesystem::path(home) / ".cache" / "jellyfin-desktop-cef";
+    }
+#endif
+    if (!cache_path.empty()) {
+        std::filesystem::create_directories(cache_path);
+        CefString(&settings.root_cache_path).FromString(cache_path.string());
+        CefString(&settings.cache_path).FromString((cache_path / "cache").string());
+    }
+
     if (!CefInitialize(main_args, settings, app, nullptr)) {
         std::cerr << "CefInitialize failed" << std::endl;
         SDL_GL_DeleteContext(gl_context);
