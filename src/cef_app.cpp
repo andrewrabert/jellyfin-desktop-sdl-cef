@@ -76,12 +76,16 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
     jmpNative->SetValue("playerSetVolume", CefV8Value::CreateFunction("playerSetVolume", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("playerSetMuted", CefV8Value::CreateFunction("playerSetMuted", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("saveServerUrl", CefV8Value::CreateFunction("saveServerUrl", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
+    jmpNative->SetValue("setFullscreen", CefV8Value::CreateFunction("setFullscreen", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     window->SetValue("jmpNative", jmpNative, V8_PROPERTY_ATTRIBUTE_READONLY);
 
     // Inject the JavaScript shim that creates window.api, window.NativeShell, etc.
     const char* native_shim = R"JS(
 (function() {
     console.log('[Native] Installing native shim...');
+
+    // Fullscreen state tracking
+    window._isFullscreen = false;
 
     // Signal emulation (Qt-style connect/disconnect)
     function createSignal(name) {
@@ -271,6 +275,13 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
         input: {
             executeActions(actions) {
                 console.log('[Native] executeActions:', actions);
+                for (const action of actions) {
+                    if (action === 'host:fullscreen') {
+                        const newState = !window._isFullscreen;
+                        window._isFullscreen = newState;
+                        if (window.jmpNative) window.jmpNative.setFullscreen(newState);
+                    }
+                }
             }
         },
         window: {
@@ -623,7 +634,7 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
         }
         static getSupportedFeatures() { return ['PlaybackRate', 'SetAspectRatio']; }
         supports(feature) { return mpvVideoPlayer.getSupportedFeatures().includes(feature); }
-        isFullscreen() { return window.jmpInfo?.settings?.main?.fullscreen === true; }
+        isFullscreen() { return window._isFullscreen === true; }
         toggleFullscreen() { window.api?.input?.executeActions(['host:fullscreen']); }
 
         currentTime(val) {
@@ -810,6 +821,15 @@ bool NativeV8Handler::Execute(const CefString& name,
             msg->GetArgumentList()->SetString(0, url);
             browser_->GetMainFrame()->SendProcessMessage(PID_BROWSER, msg);
         }
+        return true;
+    }
+
+    if (name == "setFullscreen") {
+        bool enable = arguments.size() >= 1 && arguments[0]->IsBool() ? arguments[0]->GetBoolValue() : true;
+        std::cout << "[V8] setFullscreen: " << enable << std::endl;
+        CefRefPtr<CefProcessMessage> msg = CefProcessMessage::Create("setFullscreen");
+        msg->GetArgumentList()->SetBool(0, enable);
+        browser_->GetMainFrame()->SendProcessMessage(PID_BROWSER, msg);
         return true;
     }
 

@@ -65,6 +65,10 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
         Settings::instance().setServerUrl(url);
         Settings::instance().save();
         return true;
+    } else if (name == "setFullscreen") {
+        bool enable = args->GetBool(0);
+        on_player_msg_("fullscreen", "", enable ? 1 : 0);
+        return true;
     }
 
     return false;

@@ -393,6 +393,9 @@ int main(int argc, char* argv[]) {
                     mpv.setVolume(cmd.intArg);
                 } else if (cmd.cmd == "mute") {
                     mpv.setMuted(cmd.intArg != 0);
+                } else if (cmd.cmd == "fullscreen") {
+                    bool enable = cmd.intArg != 0;
+                    SDL_SetWindowFullscreen(window, enable);
                 }
             }
             pending_cmds.clear();
