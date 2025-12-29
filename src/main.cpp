@@ -145,6 +145,7 @@ int main(int argc, char* argv[]) {
     CefSettings settings;
     settings.windowless_rendering_enabled = true;
     settings.no_sandbox = true;
+    settings.multi_threaded_message_loop = true;  // CEF runs on separate thread
 
     std::filesystem::path exe_path = std::filesystem::canonical("/proc/self/exe").parent_path();
     CefString(&settings.resources_dir_path).FromString(exe_path.string());
@@ -487,7 +488,7 @@ int main(int argc, char* argv[]) {
             overlay_alpha = std::max(0.0f, 1.0f - fade_progress);
         }
 
-        CefDoMessageLoopWork();
+        // CEF runs on separate thread (multi_threaded_message_loop)
 
         // Update position/duration
         static auto last_position_update = Clock::now();
