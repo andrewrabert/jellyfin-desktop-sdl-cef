@@ -47,6 +47,8 @@ bool MpvPlayerVk::init(VulkanContext* vk, WaylandSubsurface* subsurface) {
     mpv_set_option_string(mpv_, "keep-open", "yes");
     mpv_set_option_string(mpv_, "terminal", "yes");
     mpv_set_option_string(mpv_, "msg-level", "all=v");
+    mpv_set_option_string(mpv_, "video-sync", "audio");  // Simple audio sync, no frame interpolation
+    mpv_set_option_string(mpv_, "interpolation", "no");  // Disable motion interpolation
 
     // HDR output configuration - tell mpv to output PQ/BT.2020
     // We handle Wayland color signaling ourselves, so use explicit targets
