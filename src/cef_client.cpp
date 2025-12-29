@@ -1,9 +1,12 @@
 #include "cef_client.h"
 #include "settings.h"
 #include <iostream>
+#include <unistd.h>  // For dup()
 
-Client::Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg)
-    : width_(width), height_(height), on_paint_(std::move(on_paint)), on_player_msg_(std::move(on_player_msg)) {}
+Client::Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg,
+               AcceleratedPaintCallback on_accel_paint)
+    : width_(width), height_(height), on_paint_(std::move(on_paint)),
+      on_player_msg_(std::move(on_player_msg)), on_accel_paint_(std::move(on_accel_paint)) {}
 
 bool Client::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
                                cef_log_severity_t level,
@@ -83,6 +86,29 @@ void Client::OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
                      int width, int height) {
     if (on_paint_) {
         on_paint_(buffer, width, height);
+    }
+}
+
+void Client::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
+                                const RectList& dirtyRects,
+                                const CefAcceleratedPaintInfo& info) {
+    if (on_accel_paint_) {
+        AcceleratedPaintInfo paintInfo;
+        paintInfo.width = width_;
+        paintInfo.height = height_;
+        paintInfo.modifier = info.modifier;
+        paintInfo.format = info.format;
+
+        for (int i = 0; i < info.plane_count; i++) {
+            DmaBufPlane plane;
+            plane.fd = dup(info.planes[i].fd);  // Duplicate before CEF releases it
+            plane.stride = info.planes[i].stride;
+            plane.offset = info.planes[i].offset;
+            plane.size = info.planes[i].size;
+            paintInfo.planes.push_back(plane);
+        }
+
+        on_accel_paint_(paintInfo);
     }
 }
 

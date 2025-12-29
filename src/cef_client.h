@@ -6,15 +6,34 @@
 #include "include/cef_load_handler.h"
 #include <atomic>
 #include <functional>
+#include <vector>
 
 // Message callback for player commands from renderer
 using PlayerMessageCallback = std::function<void(const std::string& cmd, const std::string& arg, int intArg)>;
 
+// DMA-BUF plane info for accelerated paint
+struct DmaBufPlane {
+    int fd;
+    uint32_t stride;
+    uint64_t offset;
+    uint64_t size;
+};
+
+struct AcceleratedPaintInfo {
+    int width;
+    int height;
+    uint64_t modifier;
+    uint32_t format;  // DRM format
+    std::vector<DmaBufPlane> planes;
+};
+
 class Client : public CefClient, public CefRenderHandler, public CefLifeSpanHandler, public CefDisplayHandler, public CefLoadHandler {
 public:
     using PaintCallback = std::function<void(const void* buffer, int width, int height)>;
+    using AcceleratedPaintCallback = std::function<void(const AcceleratedPaintInfo& info)>;
 
-    Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg = nullptr);
+    Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg = nullptr,
+           AcceleratedPaintCallback on_accel_paint = nullptr);
 
     // CefClient
     CefRefPtr<CefRenderHandler> GetRenderHandler() override { return this; }
@@ -38,6 +57,9 @@ public:
     void OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
                  const RectList& dirtyRects, const void* buffer,
                  int width, int height) override;
+    void OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
+                            const RectList& dirtyRects,
+                            const CefAcceleratedPaintInfo& info) override;
 
     // CefLifeSpanHandler
     void OnAfterCreated(CefRefPtr<CefBrowser> browser) override;
@@ -73,6 +95,7 @@ private:
     int height_;
     PaintCallback on_paint_;
     PlayerMessageCallback on_player_msg_;
+    AcceleratedPaintCallback on_accel_paint_;
     std::atomic<bool> is_closed_ = false;
     CefRefPtr<CefBrowser> browser_;
 

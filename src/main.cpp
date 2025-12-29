@@ -187,8 +187,17 @@ int main(int argc, char* argv[]) {
     std::mutex cmd_mutex;
     std::vector<PlayerCmd> pending_cmds;
 
+    // DMA-BUF info for accelerated paint
+    struct PendingDmaBuf {
+        AcceleratedPaintInfo info;
+        bool ready = false;
+    };
+    std::mutex dmabuf_mutex;
+    PendingDmaBuf pending_dmabuf;
+
     CefRefPtr<Client> client(new Client(width, height,
         [&](const void* buffer, int w, int h) {
+            // Software paint fallback
             std::lock_guard<std::mutex> lock(buffer_mutex);
             size_t size = w * h * 4;
             paint_buffer_copy.resize(size);
@@ -200,11 +209,20 @@ int main(int argc, char* argv[]) {
         [&](const std::string& cmd, const std::string& arg, int intArg) {
             std::lock_guard<std::mutex> lock(cmd_mutex);
             pending_cmds.push_back({cmd, arg, intArg});
+        },
+        [&](const AcceleratedPaintInfo& info) {
+            // GPU accelerated paint with DMA-BUF
+            std::lock_guard<std::mutex> lock(dmabuf_mutex);
+            pending_dmabuf.info = info;
+            pending_dmabuf.ready = true;
         }
     ));
 
     CefWindowInfo window_info;
     window_info.SetAsWindowless(0);
+#if defined(CEF_X11) || defined(__linux__)
+    window_info.shared_texture_enabled = true;
+#endif
 
     CefBrowserSettings browser_settings;
     browser_settings.background_color = 0;
@@ -336,16 +354,28 @@ int main(int argc, char* argv[]) {
             } else if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
                 client->sendFocus(false);
             } else if (event.type == SDL_EVENT_WINDOW_RESIZED) {
+                auto resize_start = std::chrono::steady_clock::now();
                 current_width = event.window.data1;
                 current_height = event.window.data2;
                 vkDeviceWaitIdle(vk.device());
+                auto t1 = std::chrono::steady_clock::now();
                 vk.recreateSwapchain(current_width, current_height);
+                auto t2 = std::chrono::steady_clock::now();
                 compositor.resize(current_width, current_height);
+                auto t3 = std::chrono::steady_clock::now();
                 client->resize(current_width, current_height);
+                auto t4 = std::chrono::steady_clock::now();
                 if (has_subsurface) {
                     vkDeviceWaitIdle(subsurface.vkDevice());
                     subsurface.recreateSwapchain(current_width, current_height);
                 }
+                auto t5 = std::chrono::steady_clock::now();
+                std::cerr << "main resize: wait=" << std::chrono::duration_cast<std::chrono::milliseconds>(t1-resize_start).count()
+                          << "ms swap=" << std::chrono::duration_cast<std::chrono::milliseconds>(t2-t1).count()
+                          << "ms comp=" << std::chrono::duration_cast<std::chrono::milliseconds>(t3-t2).count()
+                          << "ms cef=" << std::chrono::duration_cast<std::chrono::milliseconds>(t4-t3).count()
+                          << "ms sub=" << std::chrono::duration_cast<std::chrono::milliseconds>(t5-t4).count()
+                          << "ms total=" << std::chrono::duration_cast<std::chrono::milliseconds>(t5-resize_start).count() << "ms" << std::endl;
             } else if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) {
                 bool down = (event.type == SDL_EVENT_KEY_DOWN);
                 SDL_Keycode key = event.key.key;
@@ -435,7 +465,15 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Update overlay texture
+        // Update overlay texture - prefer DMA-BUF (GPU) over software path
+        {
+            std::lock_guard<std::mutex> lock(dmabuf_mutex);
+            if (pending_dmabuf.ready) {
+                compositor.updateOverlayFromDmaBuf(pending_dmabuf.info);
+                pending_dmabuf.ready = false;
+            }
+        }
+        // Fallback to software path if DMA-BUF not available
         if (texture_dirty) {
             std::lock_guard<std::mutex> lock(buffer_mutex);
             if (!paint_buffer_copy.empty()) {
@@ -518,8 +556,8 @@ int main(int argc, char* argv[]) {
                                  0, 0, nullptr, 0, nullptr, 1, &barrier);
         }
 
-        // Composite overlay (skip when using --video for HDR testing)
-        if (test_video.empty()) {
+        // Composite overlay (skip when using --video for HDR testing, or when no valid content)
+        if (test_video.empty() && compositor.hasValidOverlay()) {
             float alpha = has_video ? overlay_alpha : 1.0f;
             compositor.composite(cmd_buffer, vk.swapchainImages()[image_idx], vk.swapchainViews()[image_idx],
                                 vk.swapchainExtent().width, vk.swapchainExtent().height, alpha);
