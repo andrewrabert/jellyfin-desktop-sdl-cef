@@ -2,6 +2,7 @@
 build/
 
 # CEF binary distribution
+third_party/cef
 third_party/cef/
 
 # IDE

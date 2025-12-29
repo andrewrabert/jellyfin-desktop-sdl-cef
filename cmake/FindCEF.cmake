@@ -36,10 +36,25 @@ else() # Linux
     )
 endif()
 
-# Check for wrapper library - must be built first
+# Build wrapper library if not present
 if(NOT EXISTS "${CEF_ROOT}/build/libcef_dll_wrapper/libcef_dll_wrapper.a")
-    message(WARNING "libcef_dll_wrapper not found. You may need to build it first:")
-    message(WARNING "  cd ${CEF_ROOT} && cmake -B build && cmake --build build --target libcef_dll_wrapper")
+    message(STATUS "Building libcef_dll_wrapper...")
+    execute_process(
+        COMMAND ${CMAKE_COMMAND} -B build -DCMAKE_BUILD_TYPE=Release
+        WORKING_DIRECTORY ${CEF_ROOT}
+        RESULT_VARIABLE CEF_CONFIG_RESULT
+    )
+    if(NOT CEF_CONFIG_RESULT EQUAL 0)
+        message(FATAL_ERROR "Failed to configure CEF")
+    endif()
+    execute_process(
+        COMMAND ${CMAKE_COMMAND} --build build --target libcef_dll_wrapper -j
+        WORKING_DIRECTORY ${CEF_ROOT}
+        RESULT_VARIABLE CEF_BUILD_RESULT
+    )
+    if(NOT CEF_BUILD_RESULT EQUAL 0)
+        message(FATAL_ERROR "Failed to build libcef_dll_wrapper")
+    endif()
 endif()
 
 set(CEF_FOUND TRUE)
