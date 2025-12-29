@@ -40,11 +40,14 @@ int sdlModsToCef(SDL_Keymod sdlMods) {
 }
 
 int main(int argc, char* argv[]) {
-    // Parse CLI args for test video
+    // Parse CLI args
     std::string test_video;
+    bool use_gpu_overlay = false;  // DMA-BUF shared textures (experimental, unstable)
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--video") == 0 && i + 1 < argc) {
             test_video = argv[++i];
+        } else if (strcmp(argv[i], "--gpu-overlay") == 0) {
+            use_gpu_overlay = true;
         }
     }
 
@@ -221,7 +224,10 @@ int main(int argc, char* argv[]) {
     CefWindowInfo window_info;
     window_info.SetAsWindowless(0);
 #if defined(CEF_X11) || defined(__linux__)
-    window_info.shared_texture_enabled = true;
+    window_info.shared_texture_enabled = use_gpu_overlay;
+    if (use_gpu_overlay) {
+        std::cout << "GPU overlay enabled (DMA-BUF shared textures)" << std::endl;
+    }
 #endif
 
     CefBrowserSettings browser_settings;
@@ -473,11 +479,12 @@ int main(int argc, char* argv[]) {
                 pending_dmabuf.ready = false;
             }
         }
-        // Fallback to software path if DMA-BUF not available
+        // Software path if DMA-BUF not available/enabled
         if (texture_dirty) {
             std::lock_guard<std::mutex> lock(buffer_mutex);
             if (!paint_buffer_copy.empty()) {
                 compositor.updateOverlay(paint_buffer_copy.data(), paint_width, paint_height);
+                compositor.setSoftwareContentReady();
             }
             texture_dirty = false;
         }

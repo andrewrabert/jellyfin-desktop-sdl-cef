@@ -4,7 +4,6 @@
 #include <vector>
 #include <unistd.h>  // For close()
 #include <sys/stat.h>  // For fstat()
-#include <chrono>
 
 // DRM format definitions
 #ifndef DRM_FORMAT_ARGB8888
@@ -692,11 +691,7 @@ void VulkanCompositor::composite(VkCommandBuffer cmd, VkImage target, VkImageVie
 void VulkanCompositor::resize(uint32_t width, uint32_t height) {
     if (width == width_ && height == height_) return;
 
-    auto t0 = std::chrono::steady_clock::now();
     vkDeviceWaitIdle(vk_->device());
-    auto t1 = std::chrono::steady_clock::now();
-    std::cerr << "resize: vkDeviceWaitIdle took "
-              << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count() << "ms" << std::endl;
 
     // Destroy all resources
     destroyDmaBufImage();
@@ -732,10 +727,6 @@ void VulkanCompositor::resize(uint32_t width, uint32_t height) {
     createOverlayResources();
     createPipeline();
     createDescriptorSets();
-
-    auto t2 = std::chrono::steady_clock::now();
-    std::cerr << "resize: total " << std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t0).count()
-              << "ms (" << width << "x" << height << ")" << std::endl;
 }
 
 void VulkanCompositor::destroyOverlayResources() {
@@ -793,6 +784,7 @@ void VulkanCompositor::destroyDmaBufImage() {
     }
     dmabuf_current_ = 0;
     using_dmabuf_ = false;
+    has_software_content_ = false;
 }
 
 bool VulkanCompositor::updateOverlayFromDmaBuf(const AcceleratedPaintInfo& info) {
@@ -820,7 +812,6 @@ bool VulkanCompositor::updateOverlayFromDmaBuf(const AcceleratedPaintInfo& info)
     for (int i = 0; i < DMABUF_BUFFER_COUNT; i++) {
         if (dmabuf_[i].buffer_id == buffer_id && dmabuf_[i].image) {
             // Found existing import - reuse it
-            std::cerr << "DMA-BUF: reuse slot " << i << " buffer_id=" << std::hex << buffer_id << std::dec << std::endl;
             close(info.planes[0].fd);
             dmabuf_current_ = i;
             using_dmabuf_ = true;
@@ -845,7 +836,6 @@ bool VulkanCompositor::updateOverlayFromDmaBuf(const AcceleratedPaintInfo& info)
     }
 
     // New buffer - find an empty slot
-    auto import_start = std::chrono::steady_clock::now();
     int next = -1;
     for (int i = 0; i < DMABUF_BUFFER_COUNT; i++) {
         if (!dmabuf_[i].image) {
@@ -854,19 +844,13 @@ bool VulkanCompositor::updateOverlayFromDmaBuf(const AcceleratedPaintInfo& info)
         }
     }
     if (next < 0) {
-        // All slots full - dump what we have
-        std::cerr << "DMA-BUF: all slots full (buffer_id=" << std::hex << buffer_id << std::dec << "), slots:" << std::endl;
-        for (int i = 0; i < DMABUF_BUFFER_COUNT; i++) {
-            std::cerr << "  [" << i << "] id=" << std::hex << dmabuf_[i].buffer_id << std::dec
-                      << " img=" << (dmabuf_[i].image ? "yes" : "no") << std::endl;
-        }
+        // All slots full - skip frame rather than risk GPU hang
         close(info.planes[0].fd);
-        return using_dmabuf_;  // Return current state - keep showing last frame
+        return using_dmabuf_;
     }
     auto& buf = dmabuf_[next];
 
     // Create and import new DMA-BUF image
-    auto create_start = std::chrono::steady_clock::now();
     VkExternalMemoryImageCreateInfo ext_info{};
     ext_info.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
     ext_info.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
@@ -977,10 +961,6 @@ bool VulkanCompositor::updateOverlayFromDmaBuf(const AcceleratedPaintInfo& info)
         return false;
     }
 
-    auto create_end = std::chrono::steady_clock::now();
-    std::cerr << "  create/import took "
-              << std::chrono::duration_cast<std::chrono::milliseconds>(create_end - create_start).count() << "ms" << std::endl;
-
     // Note: For DMA-BUF imports with DRM modifiers, explicit layout transition
     // is not needed - the image can be used directly in UNDEFINED layout with
     // VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT. The driver handles it.
@@ -1007,7 +987,6 @@ bool VulkanCompositor::updateOverlayFromDmaBuf(const AcceleratedPaintInfo& info)
     buf.height = info.height;
     buf.buffer_id = buffer_id;
     dmabuf_current_ = next;
-    std::cerr << "DMA-BUF: new import slot " << next << " buffer_id=" << std::hex << buffer_id << std::dec << std::endl;
 
     // Update descriptor set
     VkDescriptorImageInfo img_info{};
@@ -1024,11 +1003,6 @@ bool VulkanCompositor::updateOverlayFromDmaBuf(const AcceleratedPaintInfo& info)
     write.pImageInfo = &img_info;
 
     vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
-
-    auto import_end = std::chrono::steady_clock::now();
-    std::cerr << "DMA-BUF import took "
-              << std::chrono::duration_cast<std::chrono::milliseconds>(import_end - import_start).count()
-              << "ms (slot " << next << ", " << info.width << "x" << info.height << ")" << std::endl;
 
     using_dmabuf_ = true;
     return true;

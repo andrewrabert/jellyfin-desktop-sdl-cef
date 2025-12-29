@@ -25,8 +25,11 @@ public:
     // Resize resources
     void resize(uint32_t width, uint32_t height);
 
-    // Check if we have valid DMA-BUF content to composite
-    bool hasValidOverlay() const { return using_dmabuf_; }
+    // Check if we have valid content to composite
+    bool hasValidOverlay() const { return using_dmabuf_ || has_software_content_; }
+
+    // Mark that we have software content
+    void setSoftwareContentReady() { has_software_content_ = true; }
 
 private:
     bool createOverlayResources();
@@ -60,6 +63,7 @@ private:
     int dmabuf_current_ = 0;
     bool using_dmabuf_ = false;
     bool dmabuf_supported_ = true;  // Set false if import fails
+    bool has_software_content_ = false;
 
     // Staging buffer for texture upload
     VkBuffer staging_buffer_ = VK_NULL_HANDLE;
