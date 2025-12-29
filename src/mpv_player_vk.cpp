@@ -183,13 +183,14 @@ bool MpvPlayerVk::isPaused() const {
     return paused != 0;
 }
 
+bool MpvPlayerVk::hasFrame() const {
+    if (!render_ctx_) return false;
+    uint64_t flags = mpv_render_context_update(render_ctx_);
+    return (flags & MPV_RENDER_UPDATE_FRAME) != 0;
+}
+
 void MpvPlayerVk::render(VkImage image, VkImageView view, uint32_t width, uint32_t height, VkFormat format) {
     if (!render_ctx_) return;
-
-    uint64_t flags = mpv_render_context_update(render_ctx_);
-    if (!(flags & MPV_RENDER_UPDATE_FRAME)) {
-        return;
-    }
 
     mpv_vulkan_fbo fbo{};
     fbo.image = image;

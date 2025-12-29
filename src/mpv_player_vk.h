@@ -20,6 +20,9 @@ public:
     void cleanup();
     bool loadFile(const std::string& path);
 
+    // Check if mpv has a new frame ready to render
+    bool hasFrame() const;
+
     // Render to swapchain image
     void render(VkImage image, VkImageView view, uint32_t width, uint32_t height, VkFormat format);
 

@@ -460,7 +460,7 @@ int main(int argc, char* argv[]) {
         vkBeginCommandBuffer(cmd_buffer, &begin_info);
 
         // Render video to subsurface (if available) or main swapchain
-        if (has_video && has_subsurface) {
+        if (has_video && has_subsurface && mpv.hasFrame()) {
             // mpv renders to separate HDR subsurface (using libplacebo swapchain)
             VkImage sub_image;
             VkImageView sub_view;
@@ -471,7 +471,7 @@ int main(int argc, char* argv[]) {
                           sub_format);
                 subsurface.submitFrame();
             }
-        } else if (has_video) {
+        } else if (has_video && !has_subsurface) {
             // Fallback: mpv renders to main swapchain (SDR)
             mpv.render(vk.swapchainImages()[image_idx], vk.swapchainViews()[image_idx],
                       vk.swapchainExtent().width, vk.swapchainExtent().height, vk.swapchainFormat());
