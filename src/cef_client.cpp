@@ -201,14 +201,16 @@ void Client::sendChar(int charCode, int modifiers) {
     browser_->GetHost()->SendKeyEvent(event);
 }
 
-void Client::sendMouseWheel(int x, int y, int deltaX, int deltaY, int modifiers) {
+void Client::sendMouseWheel(int x, int y, float deltaX, float deltaY, int modifiers) {
     if (!browser_) return;
     CefMouseEvent event;
     event.x = x;
     event.y = y;
     event.modifiers = modifiers;
-    // CEF expects pixels, SDL gives discrete steps - scale up
-    browser_->GetHost()->SendMouseWheelEvent(event, deltaX * 120, deltaY * 120);
+    // SDL3 provides smooth scroll values, scale for CEF (expects ~120 per notch)
+    int pixelX = static_cast<int>(deltaX * 53.0f);  // Smooth scroll factor
+    int pixelY = static_cast<int>(deltaY * 53.0f);
+    browser_->GetHost()->SendMouseWheelEvent(event, pixelX, pixelY);
 }
 
 void Client::sendFocus(bool focused) {

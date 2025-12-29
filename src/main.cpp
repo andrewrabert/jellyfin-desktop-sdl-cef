@@ -321,8 +321,7 @@ int main(int argc, char* argv[]) {
                 client->sendMouseClick(static_cast<int>(event.button.x), static_cast<int>(event.button.y),
                                        false, event.button.button, click_count, mods);
             } else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
-                client->sendMouseWheel(mouse_x, mouse_y,
-                                       static_cast<int>(event.wheel.x), static_cast<int>(event.wheel.y), mods);
+                client->sendMouseWheel(mouse_x, mouse_y, event.wheel.x, event.wheel.y, mods);
             } else if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED) {
                 client->sendFocus(true);
             } else if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {

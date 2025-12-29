@@ -51,7 +51,7 @@ public:
     // Input forwarding
     void sendMouseMove(int x, int y, int modifiers);
     void sendMouseClick(int x, int y, bool down, int button, int clickCount, int modifiers);
-    void sendMouseWheel(int x, int y, int deltaX, int deltaY, int modifiers);
+    void sendMouseWheel(int x, int y, float deltaX, float deltaY, int modifiers);
     void sendKeyEvent(int key, bool down, int modifiers);
     void sendChar(int charCode, int modifiers);
     void sendFocus(bool focused);
