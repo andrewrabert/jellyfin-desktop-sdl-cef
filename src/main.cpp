@@ -1,6 +1,4 @@
 #include <SDL3/SDL.h>
-#include <SDL3/SDL_vulkan.h>
-#include <vulkan/vulkan.h>
 #include <iostream>
 #include <filesystem>
 #include <atomic>
@@ -16,8 +14,8 @@
 #include "include/cef_browser.h"
 #include "include/cef_command_line.h"
 
-#include "vulkan_context.h"
-#include "vulkan_compositor.h"
+#include "egl_context.h"
+#include "opengl_compositor.h"
 #include "mpv_player_vk.h"
 #include "wayland_subsurface.h"
 #include "cef_app.h"
@@ -48,7 +46,7 @@ inline long _ms() { return std::chrono::duration_cast<std::chrono::milliseconds>
 int main(int argc, char* argv[]) {
     // Parse CLI args
     std::string test_video;
-    bool use_gpu_overlay = false;  // DMA-BUF shared textures (experimental, unstable)
+    bool use_gpu_overlay = false;  // DMA-BUF shared textures (experimental)
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--video") == 0 && i + 1 < argc) {
             test_video = argv[++i];
@@ -66,7 +64,7 @@ int main(int argc, char* argv[]) {
         return exit_code;
     }
 
-    // SDL initialization with Vulkan
+    // SDL initialization with OpenGL (for main surface CEF overlay)
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::cerr << "SDL_Init failed: " << SDL_GetError() << std::endl;
         return 1;
@@ -75,10 +73,11 @@ int main(int argc, char* argv[]) {
     const int width = 1280;
     const int height = 720;
 
+    // Use plain Wayland window - we create our own EGL context
     SDL_Window* window = SDL_CreateWindow(
         "Jellyfin Desktop",
         width, height,
-        SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE
+        SDL_WINDOW_RESIZABLE
     );
 
     if (!window) {
@@ -89,26 +88,19 @@ int main(int argc, char* argv[]) {
 
     SDL_StartTextInput(window);
 
-    // Initialize Vulkan
-    VulkanContext vk;
-    if (!vk.init(window)) {
-        std::cerr << "Vulkan init failed" << std::endl;
+    // Initialize EGL context for OpenGL rendering
+    EGLContext_ egl;
+    if (!egl.init(window)) {
+        std::cerr << "EGL init failed" << std::endl;
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
     }
 
-    if (!vk.createSwapchain(width, height)) {
-        std::cerr << "Swapchain creation failed" << std::endl;
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
-    }
-
-    // Initialize Wayland subsurface for HDR video
+    // Initialize Wayland subsurface for HDR video (uses its own Vulkan)
     WaylandSubsurface subsurface;
-    if (!subsurface.init(window, vk.instance(), vk.physicalDevice(), vk.device(), vk.queueFamily(),
-                         vk.deviceExtensions(), vk.deviceExtensionCount(), vk.features())) {
+    if (!subsurface.init(window, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, 0,
+                         nullptr, 0, nullptr)) {
         std::cerr << "Fatal: Wayland subsurface init failed" << std::endl;
         return 1;
     }
@@ -120,20 +112,20 @@ int main(int argc, char* argv[]) {
     std::cout << "Using Wayland subsurface for video (HDR: "
               << (subsurface.isHdr() ? "yes" : "no") << ")" << std::endl;
 
-    // Initialize mpv player
+    // Initialize mpv player (using subsurface's Vulkan context)
     MpvPlayerVk mpv;
     bool has_video = false;
-    if (!mpv.init(&vk, has_subsurface ? &subsurface : nullptr)) {
+    if (!mpv.init(nullptr, &subsurface)) {
         std::cerr << "MpvPlayerVk init failed" << std::endl;
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
     }
 
-    // Initialize compositor
-    VulkanCompositor compositor;
-    if (!compositor.init(&vk, width, height)) {
-        std::cerr << "VulkanCompositor init failed" << std::endl;
+    // Initialize OpenGL compositor for CEF overlay
+    OpenGLCompositor compositor;
+    if (!compositor.init(&egl, width, height)) {
+        std::cerr << "OpenGLCompositor init failed" << std::endl;
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
@@ -204,7 +196,7 @@ int main(int argc, char* argv[]) {
         std::mutex mutex;
         std::condition_variable cv;
         AcceleratedPaintInfo info;
-        VulkanCompositor* compositor = nullptr;
+        OpenGLCompositor* compositor = nullptr;
         bool pending = false;
         bool shutdown = false;
     };
@@ -302,27 +294,6 @@ int main(int argc, char* argv[]) {
     int current_width = width;
     int current_height = height;
 
-    // Create command buffer and sync objects
-    VkCommandBuffer cmd_buffer;
-    VkCommandBufferAllocateInfo alloc_info{};
-    alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    alloc_info.commandPool = vk.commandPool();
-    alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    alloc_info.commandBufferCount = 1;
-    vkAllocateCommandBuffers(vk.device(), &alloc_info, &cmd_buffer);
-
-    VkSemaphore image_available, render_finished;
-    VkSemaphoreCreateInfo sem_info{};
-    sem_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-    vkCreateSemaphore(vk.device(), &sem_info, nullptr, &image_available);
-    vkCreateSemaphore(vk.device(), &sem_info, nullptr, &render_finished);
-
-    VkFence in_flight;
-    VkFenceCreateInfo fence_info{};
-    fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-    vkCreateFence(vk.device(), &fence_info, nullptr, &in_flight);
-
     // Auto-load test video if provided via --video
     if (!test_video.empty()) {
         std::cout << "[TEST] Loading video: " << test_video << std::endl;
@@ -331,12 +302,13 @@ int main(int argc, char* argv[]) {
             if (has_subsurface && subsurface.isHdr()) {
                 subsurface.setColorspace();
             }
+            client->emitPlaying();
         } else {
             std::cerr << "[TEST] Failed to load: " << test_video << std::endl;
         }
     }
 
-    // Main loop
+    // Main loop - simplified (no Vulkan command buffers for main surface)
     bool running = true;
     bool needs_render = true;  // Render first frame
     while (running && !client->isClosed()) {
@@ -349,15 +321,13 @@ int main(int argc, char* argv[]) {
         }
 
         // Event-driven: wait for events when idle, poll when active
-        // This saves CPU/power when nothing is happening
         SDL_Event event;
         bool have_event;
-        if (needs_render || has_video || compositor.hasPendingContent()) {
-            // Active: poll without blocking
+        if (needs_render || has_video || compositor.hasPendingContent() || importer.pending) {
             have_event = SDL_PollEvent(&event);
         } else {
-            // Idle: wait up to 16ms for events (saves CPU)
-            have_event = SDL_WaitEventTimeout(&event, 16);
+            // Short wait - just yield CPU, don't block long (1ms for ~1000Hz max)
+            have_event = SDL_WaitEventTimeout(&event, 1);
         }
 
         while (have_event) {
@@ -386,17 +356,16 @@ int main(int argc, char* argv[]) {
                 } else if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
                     menu.close();
                 }
-                continue;  // Don't forward to CEF while menu is open
+                continue;
             }
 
             if (event.type == SDL_EVENT_MOUSE_MOTION) {
                 mouse_x = static_cast<int>(event.motion.x);
                 mouse_y = static_cast<int>(event.motion.y);
-                // Include mouse button state for drag operations (scrollbar click-hold, etc.)
                 SDL_MouseButtonFlags buttons = SDL_GetMouseState(nullptr, nullptr);
-                if (buttons & SDL_BUTTON_LMASK) mods |= (1 << 5);  // EVENTFLAG_LEFT_MOUSE_BUTTON
-                if (buttons & SDL_BUTTON_MMASK) mods |= (1 << 6);  // EVENTFLAG_MIDDLE_MOUSE_BUTTON
-                if (buttons & SDL_BUTTON_RMASK) mods |= (1 << 7);  // EVENTFLAG_RIGHT_MOUSE_BUTTON
+                if (buttons & SDL_BUTTON_LMASK) mods |= (1 << 5);
+                if (buttons & SDL_BUTTON_MMASK) mods |= (1 << 6);
+                if (buttons & SDL_BUTTON_RMASK) mods |= (1 << 7);
                 client->sendMouseMove(mouse_x, mouse_y, mods);
             } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
                 int x = static_cast<int>(event.button.x);
@@ -437,25 +406,22 @@ int main(int argc, char* argv[]) {
                 auto resize_start = std::chrono::steady_clock::now();
                 current_width = event.window.data1;
                 current_height = event.window.data2;
-                vkDeviceWaitIdle(vk.device());
-                auto t1 = std::chrono::steady_clock::now();
-                vk.recreateSwapchain(current_width, current_height);
-                auto t2 = std::chrono::steady_clock::now();
+
+                // Resize EGL context (handles wl_egl_window resize)
+                egl.resize(current_width, current_height);
                 compositor.resize(current_width, current_height);
-                auto t3 = std::chrono::steady_clock::now();
                 client->resize(current_width, current_height);
-                auto t4 = std::chrono::steady_clock::now();
+
+                // Resize subsurface for video
                 if (has_subsurface) {
                     vkDeviceWaitIdle(subsurface.vkDevice());
                     subsurface.recreateSwapchain(current_width, current_height);
                 }
-                auto t5 = std::chrono::steady_clock::now();
-                std::cerr << "[" << _ms() << "ms] main resize: wait=" << std::chrono::duration_cast<std::chrono::milliseconds>(t1-resize_start).count()
-                          << "ms swap=" << std::chrono::duration_cast<std::chrono::milliseconds>(t2-t1).count()
-                          << "ms comp=" << std::chrono::duration_cast<std::chrono::milliseconds>(t3-t2).count()
-                          << "ms cef=" << std::chrono::duration_cast<std::chrono::milliseconds>(t4-t3).count()
-                          << "ms sub=" << std::chrono::duration_cast<std::chrono::milliseconds>(t5-t4).count()
-                          << "ms total=" << std::chrono::duration_cast<std::chrono::milliseconds>(t5-resize_start).count() << "ms" << std::endl;
+
+                auto resize_end = std::chrono::steady_clock::now();
+                std::cerr << "[" << _ms() << "ms] resize: total="
+                          << std::chrono::duration_cast<std::chrono::milliseconds>(resize_end-resize_start).count()
+                          << "ms" << std::endl;
             } else if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) {
                 bool down = (event.type == SDL_EVENT_KEY_DOWN);
                 SDL_Keycode key = event.key.key;
@@ -478,12 +444,8 @@ int main(int argc, char* argv[]) {
         }
 
         // Determine if we need to render this frame
-        needs_render = activity_this_frame || has_video || compositor.hasPendingContent();
-
-        // Skip rendering if nothing to do (saves GPU)
-        if (!needs_render) {
-            continue;
-        }
+        // With vsync, always render to maintain consistent frame pacing
+        needs_render = activity_this_frame || has_video || compositor.hasPendingContent() || importer.pending;
 
         if (activity_this_frame) {
             last_activity = now;
@@ -552,38 +514,11 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Menu overlay blending now handled separately (TODO: GPU-based menu rendering)
+        // Menu overlay blending
         menu.clearRedraw();
 
-        // Wait for previous frame
-        vkWaitForFences(vk.device(), 1, &in_flight, VK_TRUE, UINT64_MAX);
-        vkResetFences(vk.device(), 1, &in_flight);
-
-        // Acquire swapchain image
-        uint32_t image_idx;
-        VkResult result = vkAcquireNextImageKHR(vk.device(), vk.swapchain(), UINT64_MAX,
-                                                 image_available, VK_NULL_HANDLE, &image_idx);
-        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-            std::cerr << "Main swapchain out of date, recreating..." << std::endl;
-            SDL_GetWindowSize(window, &current_width, &current_height);
-            vkDeviceWaitIdle(vk.device());
-            vk.recreateSwapchain(current_width, current_height);
-            compositor.resize(current_width, current_height);
-            continue;
-        }
-
-        // Begin command buffer
-        vkResetCommandBuffer(cmd_buffer, 0);
-        VkCommandBufferBeginInfo begin_info{};
-        begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        vkBeginCommandBuffer(cmd_buffer, &begin_info);
-
-        // Flush pending overlay data to GPU (non-blocking, just records commands)
-        compositor.flushOverlay(cmd_buffer);
-
-        // Render video to subsurface (if available) or main swapchain
+        // Render video to subsurface
         if (has_video && has_subsurface && mpv.hasFrame()) {
-            // mpv renders to separate HDR subsurface (using libplacebo swapchain)
             VkImage sub_image;
             VkImageView sub_view;
             VkFormat sub_format;
@@ -593,86 +528,24 @@ int main(int argc, char* argv[]) {
                           sub_format);
                 subsurface.submitFrame();
             }
-        } else if (has_video && !has_subsurface) {
-            // Fallback: mpv renders to main swapchain (SDR)
-            mpv.render(vk.swapchainImages()[image_idx], vk.swapchainViews()[image_idx],
-                      vk.swapchainExtent().width, vk.swapchainExtent().height, vk.swapchainFormat());
         }
 
-        // Clear main swapchain if using subsurface for video or no video
-        if (!has_video || has_subsurface) {
-            // Clear to black when no video
-            VkImageMemoryBarrier barrier{};
-            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.image = vk.swapchainImages()[image_idx];
-            barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            barrier.srcAccessMask = 0;
-            barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        // Flush pending overlay data to GPU texture
+        compositor.flushOverlay();
 
-            vkCmdPipelineBarrier(cmd_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 0, 0, nullptr, 0, nullptr, 1, &barrier);
+        // Clear main surface (transparent when video playing, black otherwise)
+        float bg_alpha = (has_video && has_subsurface) ? 0.0f : 1.0f;
+        glClearColor(0.0f, 0.0f, 0.0f, bg_alpha);
+        glClear(GL_COLOR_BUFFER_BIT);
 
-            // Transparent when using subsurface (so video shows through), opaque black otherwise
-            float alpha = (has_video && has_subsurface) ? 0.0f : 1.0f;
-            VkClearColorValue clear_color = {{0.0f, 0.0f, 0.0f, alpha}};
-            VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            vkCmdClearColorImage(cmd_buffer, vk.swapchainImages()[image_idx],
-                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_color, 1, &range);
-
-            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            barrier.dstAccessMask = 0;
-
-            vkCmdPipelineBarrier(cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                                 0, 0, nullptr, 0, nullptr, 1, &barrier);
-        }
-
-        // Composite overlay (skip when using --video for HDR testing, or when no valid content)
+        // Composite CEF overlay (skip when using --video for HDR testing)
         if (test_video.empty() && compositor.hasValidOverlay()) {
             float alpha = has_video ? overlay_alpha : 1.0f;
-            compositor.composite(cmd_buffer, vk.swapchainImages()[image_idx], vk.swapchainViews()[image_idx],
-                                vk.swapchainExtent().width, vk.swapchainExtent().height, alpha);
+            compositor.composite(current_width, current_height, alpha);
         }
 
-        vkEndCommandBuffer(cmd_buffer);
-
-        // Submit
-        VkSubmitInfo submit_info{};
-        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        submit_info.waitSemaphoreCount = 1;
-        submit_info.pWaitSemaphores = &image_available;
-        submit_info.pWaitDstStageMask = &wait_stage;
-        submit_info.commandBufferCount = 1;
-        submit_info.pCommandBuffers = &cmd_buffer;
-        submit_info.signalSemaphoreCount = 1;
-        submit_info.pSignalSemaphores = &render_finished;
-
-        vkQueueSubmit(vk.queue(), 1, &submit_info, in_flight);
-
-        // Present
-        VkPresentInfoKHR present_info{};
-        present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-        present_info.waitSemaphoreCount = 1;
-        present_info.pWaitSemaphores = &render_finished;
-        VkSwapchainKHR swapchain = vk.swapchain();
-        present_info.swapchainCount = 1;
-        present_info.pSwapchains = &swapchain;
-        present_info.pImageIndices = &image_idx;
-
-        result = vkQueuePresentKHR(vk.queue(), &present_info);
-        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-            std::cerr << "Present returned " << result << ", recreating swapchain" << std::endl;
-            SDL_GetWindowSize(window, &current_width, &current_height);
-            vkDeviceWaitIdle(vk.device());
-            vk.recreateSwapchain(current_width, current_height);
-            compositor.resize(current_width, current_height);
-        }
+        // Swap buffers
+        egl.swapBuffers();
     }
 
     // Shutdown import thread
@@ -683,18 +556,13 @@ int main(int argc, char* argv[]) {
     importer.cv.notify_one();
     import_thread.join();
 
-    // Cleanup - order matters: wait for GPU, destroy resources, then window
-    vkDeviceWaitIdle(vk.device());
-    vkDestroySemaphore(vk.device(), image_available, nullptr);
-    vkDestroySemaphore(vk.device(), render_finished, nullptr);
-    vkDestroyFence(vk.device(), in_flight, nullptr);
-
+    // Cleanup
     mpv.cleanup();
     compositor.cleanup();
     if (has_subsurface) {
         subsurface.cleanup();
     }
-    vk.cleanup();
+    egl.cleanup();
 
     CefShutdown();
     SDL_DestroyWindow(window);

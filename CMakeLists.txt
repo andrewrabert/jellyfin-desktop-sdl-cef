@@ -27,8 +27,13 @@ find_package(CEF REQUIRED)
 # SDL3
 find_package(SDL3 REQUIRED)
 
-# Vulkan
+# Vulkan (for video subsurface)
 find_package(Vulkan REQUIRED)
+
+# OpenGL/EGL (for main surface CEF overlay)
+find_package(OpenGL REQUIRED COMPONENTS EGL OpenGL)
+pkg_check_modules(WAYLAND_EGL REQUIRED wayland-egl)
+pkg_check_modules(LIBDRM REQUIRED libdrm)
 
 # Build mpv from submodule using meson
 set(MPV_SOURCE_DIR "${CMAKE_SOURCE_DIR}/third_party/mpv")
@@ -65,8 +70,9 @@ add_executable(jellyfin-desktop
     src/main.cpp
     src/cef_app.cpp
     src/cef_client.cpp
+    src/egl_context.cpp
+    src/opengl_compositor.cpp
     src/vulkan_context.cpp
-    src/vulkan_compositor.cpp
     src/mpv_player_vk.cpp
     src/wayland_subsurface.cpp
     src/wayland-protocols/color-management-v1-code.c
@@ -79,6 +85,8 @@ target_include_directories(jellyfin-desktop PRIVATE
     ${MPV_INCLUDE_DIRS}
     ${Vulkan_INCLUDE_DIRS}
     ${WAYLAND_INCLUDE_DIRS}
+    ${WAYLAND_EGL_INCLUDE_DIRS}
+    ${LIBDRM_INCLUDE_DIRS}
     ${CMAKE_SOURCE_DIR}/src
 )
 
@@ -87,7 +95,10 @@ target_link_libraries(jellyfin-desktop PRIVATE
     SDL3::SDL3
     ${MPV_LIBRARIES}
     ${WAYLAND_LIBRARIES}
+    ${WAYLAND_EGL_LIBRARIES}
     Vulkan::Vulkan
+    OpenGL::EGL
+    OpenGL::OpenGL
 )
 
 # Linux RPATH configuration for libcef.so loading
