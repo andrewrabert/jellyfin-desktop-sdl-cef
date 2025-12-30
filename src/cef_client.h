@@ -9,12 +9,20 @@
 #include <functional>
 #include <vector>
 
+#ifdef __APPLE__
+#include <IOSurface/IOSurface.h>
+#endif
+
 class MenuOverlay;
 
 // Message callback for player commands from renderer
 using PlayerMessageCallback = std::function<void(const std::string& cmd, const std::string& arg, int intArg)>;
 
-// DMA-BUF plane info for accelerated paint
+#ifdef __APPLE__
+// macOS: IOSurface callback
+using IOSurfacePaintCallback = std::function<void(IOSurfaceRef surface, int width, int height)>;
+#else
+// Linux: DMA-BUF plane info for accelerated paint
 struct DmaBufPlane {
     int fd;
     uint32_t stride;
@@ -30,13 +38,20 @@ struct AcceleratedPaintInfo {
     std::vector<DmaBufPlane> planes;
 };
 
+using AcceleratedPaintCallback = std::function<void(const AcceleratedPaintInfo& info)>;
+#endif
+
 class Client : public CefClient, public CefRenderHandler, public CefLifeSpanHandler, public CefDisplayHandler, public CefLoadHandler, public CefContextMenuHandler {
 public:
     using PaintCallback = std::function<void(const void* buffer, int width, int height)>;
-    using AcceleratedPaintCallback = std::function<void(const AcceleratedPaintInfo& info)>;
 
+#ifdef __APPLE__
+    Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg = nullptr,
+           IOSurfacePaintCallback on_iosurface_paint = nullptr, MenuOverlay* menu = nullptr);
+#else
     Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg = nullptr,
            AcceleratedPaintCallback on_accel_paint = nullptr, MenuOverlay* menu = nullptr);
+#endif
 
     // CefClient
     CefRefPtr<CefRenderHandler> GetRenderHandler() override { return this; }
@@ -108,7 +123,11 @@ private:
     int height_;
     PaintCallback on_paint_;
     PlayerMessageCallback on_player_msg_;
+#ifdef __APPLE__
+    IOSurfacePaintCallback on_iosurface_paint_;
+#else
     AcceleratedPaintCallback on_accel_paint_;
+#endif
     MenuOverlay* menu_ = nullptr;
     std::atomic<bool> is_closed_ = false;
     CefRefPtr<CefBrowser> browser_;

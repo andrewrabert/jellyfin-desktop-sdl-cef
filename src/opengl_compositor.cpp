@@ -1,7 +1,12 @@
 #include "opengl_compositor.h"
 #include <iostream>
 #include <cstring>
+
+#ifdef __APPLE__
+#include <OpenGL/CGLIOSurface.h>
+#else
 #include <unistd.h>
+#endif
 
 static auto _log_start = std::chrono::steady_clock::now();
 #define COMP_LOG(msg) do { \
@@ -9,18 +14,60 @@ static auto _log_start = std::chrono::steady_clock::now();
     std::cerr << "[" << _now << "ms] [GLCompositor] " << msg << std::endl; std::cerr.flush(); \
 } while(0)
 
-// Vertex shader - fullscreen triangle
-static const char* vert_src = R"(#version 300 es
+#ifdef __APPLE__
+// macOS: Desktop OpenGL 3.2 Core with GL_TEXTURE_2D (software path)
+static const char* vert_src = R"(#version 150
 out vec2 texCoord;
 void main() {
-    // Generate fullscreen triangle from vertex ID
     vec2 pos = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
-    texCoord = vec2(pos.x, 1.0 - pos.y);  // Flip Y for correct orientation
+    texCoord = vec2(pos.x, 1.0 - pos.y);
     gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
 }
 )";
 
-// Fragment shader - sample texture with alpha
+static const char* frag_src = R"(#version 150
+in vec2 texCoord;
+out vec4 fragColor;
+uniform sampler2D overlayTex;
+uniform float alpha;
+void main() {
+    vec4 color = texture(overlayTex, texCoord);
+    fragColor = color * alpha;
+}
+)";
+
+// macOS: Desktop OpenGL 3.2 Core with GL_TEXTURE_RECTANGLE (IOSurface path)
+static const char* vert_rect_src = R"(#version 150
+out vec2 texCoord;
+uniform vec2 texSize;
+void main() {
+    vec2 pos = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    texCoord = vec2(pos.x, 1.0 - pos.y) * texSize;  // Non-normalized coords
+    gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
+}
+)";
+
+static const char* frag_rect_src = R"(#version 150
+in vec2 texCoord;
+out vec4 fragColor;
+uniform sampler2DRect overlayTex;
+uniform float alpha;
+void main() {
+    vec4 color = texture(overlayTex, texCoord);
+    fragColor = color * alpha;
+}
+)";
+#else
+// Linux: OpenGL ES 3.0
+static const char* vert_src = R"(#version 300 es
+out vec2 texCoord;
+void main() {
+    vec2 pos = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    texCoord = vec2(pos.x, 1.0 - pos.y);
+    gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
+}
+)";
+
 static const char* frag_src = R"(#version 300 es
 precision mediump float;
 in vec2 texCoord;
@@ -29,9 +76,10 @@ uniform sampler2D overlayTex;
 uniform float alpha;
 void main() {
     vec4 color = texture(overlayTex, texCoord);
-    fragColor = color * alpha;  // Premultiplied alpha
+    fragColor = color * alpha;
 }
 )";
+#endif
 
 OpenGLCompositor::OpenGLCompositor() = default;
 
@@ -39,16 +87,16 @@ OpenGLCompositor::~OpenGLCompositor() {
     cleanup();
 }
 
-bool OpenGLCompositor::init(EGLContext_* egl, uint32_t width, uint32_t height, bool use_dmabuf) {
-    egl_ = egl;
+bool OpenGLCompositor::init(GLContext* ctx, uint32_t width, uint32_t height, bool use_gpu_path) {
+    ctx_ = ctx;
     width_ = width;
     height_ = height;
-    use_dmabuf_ = use_dmabuf;
+    use_gpu_path_ = use_gpu_path;
 
     if (!createTexture()) return false;
     if (!createShader()) return false;
 
-    // Create VAO (required for GLES 3.0)
+    // Create VAO (required for GLES 3.0 / OpenGL core)
     glGenVertexArrays(1, &vao_);
 
     return true;
@@ -62,13 +110,29 @@ bool OpenGLCompositor::createTexture() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
+#ifdef __APPLE__
+    // IOSurface path: also create rectangle texture for IOSurface binding
+    if (use_gpu_path_) {
+        glGenTextures(1, &texture_rect_);
+        glBindTexture(GL_TEXTURE_RECTANGLE, texture_rect_);
+        glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        return true;
+    }
+
+    // Software path: allocate texture storage and PBOs
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width_, height_, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, nullptr);
+#else
     // DMA-BUF path: EGLImage provides texture backing, skip PBO setup
-    if (use_dmabuf_) {
+    if (use_gpu_path_) {
         return true;
     }
 
     // Software path: allocate texture storage and PBOs
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width_, height_, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, nullptr);
+#endif
 
     // Create double-buffered PBOs for async upload
     size_t pbo_size = width_ * height_ * 4;
@@ -150,6 +214,61 @@ bool OpenGLCompositor::createShader() {
     // Get uniform locations
     alpha_loc_ = glGetUniformLocation(program_, "alpha");
 
+#ifdef __APPLE__
+    // Create rectangle texture shader for IOSurface path
+    if (use_gpu_path_) {
+        GLuint vert_rect = glCreateShader(GL_VERTEX_SHADER);
+        glShaderSource(vert_rect, 1, &vert_rect_src, nullptr);
+        glCompileShader(vert_rect);
+
+        glGetShaderiv(vert_rect, GL_COMPILE_STATUS, &status);
+        if (!status) {
+            char log[512];
+            glGetShaderInfoLog(vert_rect, 512, nullptr, log);
+            std::cerr << "[GLCompositor] Rect vertex shader error: " << log << std::endl;
+            glDeleteShader(vert_rect);
+            return false;
+        }
+
+        GLuint frag_rect = glCreateShader(GL_FRAGMENT_SHADER);
+        glShaderSource(frag_rect, 1, &frag_rect_src, nullptr);
+        glCompileShader(frag_rect);
+
+        glGetShaderiv(frag_rect, GL_COMPILE_STATUS, &status);
+        if (!status) {
+            char log[512];
+            glGetShaderInfoLog(frag_rect, 512, nullptr, log);
+            std::cerr << "[GLCompositor] Rect fragment shader error: " << log << std::endl;
+            glDeleteShader(vert_rect);
+            glDeleteShader(frag_rect);
+            return false;
+        }
+
+        program_rect_ = glCreateProgram();
+        glAttachShader(program_rect_, vert_rect);
+        glAttachShader(program_rect_, frag_rect);
+        glLinkProgram(program_rect_);
+
+        glGetProgramiv(program_rect_, GL_LINK_STATUS, &status);
+        if (!status) {
+            char log[512];
+            glGetProgramInfoLog(program_rect_, 512, nullptr, log);
+            std::cerr << "[GLCompositor] Rect program link error: " << log << std::endl;
+            glDeleteShader(vert_rect);
+            glDeleteShader(frag_rect);
+            glDeleteProgram(program_rect_);
+            program_rect_ = 0;
+            return false;
+        }
+
+        glDeleteShader(vert_rect);
+        glDeleteShader(frag_rect);
+
+        alpha_loc_rect_ = glGetUniformLocation(program_rect_, "alpha");
+        texsize_loc_rect_ = glGetUniformLocation(program_rect_, "texSize");
+    }
+#endif
+
     return true;
 }
 
@@ -202,6 +321,72 @@ bool OpenGLCompositor::flushOverlay() {
     return true;
 }
 
+#ifdef __APPLE__
+// macOS: IOSurface import
+void OpenGLCompositor::queueIOSurface(IOSurfaceRef surface, int width, int height) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    // Release previous queued surface if not yet imported
+    if (iosurface_queued_ && pending_iosurface_) {
+        CFRelease(pending_iosurface_);
+    }
+
+    pending_iosurface_ = surface;
+    if (surface) CFRetain(surface);
+    pending_iosurface_width_ = width;
+    pending_iosurface_height_ = height;
+    iosurface_queued_ = true;
+}
+
+bool OpenGLCompositor::importQueuedIOSurface() {
+    IOSurfaceRef surface;
+    int surf_width, surf_height;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!iosurface_queued_) return false;
+        surface = pending_iosurface_;
+        surf_width = pending_iosurface_width_;
+        surf_height = pending_iosurface_height_;
+        pending_iosurface_ = nullptr;
+        iosurface_queued_ = false;
+    }
+
+    if (!surface) {
+        return false;
+    }
+
+    // Skip if size doesn't match
+    if (static_cast<uint32_t>(surf_width) != width_ || static_cast<uint32_t>(surf_height) != height_) {
+        COMP_LOG("importQueuedIOSurface: " << surf_width << "x" << surf_height << " (want: " << width_ << "x" << height_ << ") - skipping");
+        CFRelease(surface);
+        return false;
+    }
+
+    COMP_LOG("importQueuedIOSurface: " << surf_width << "x" << surf_height);
+
+    // Bind IOSurface to rectangle texture
+    glBindTexture(GL_TEXTURE_RECTANGLE, texture_rect_);
+
+    CGLContextObj cgl_ctx = ctx_->cglContext();
+    CGLError cgl_err = CGLTexImageIOSurface2D(cgl_ctx, GL_TEXTURE_RECTANGLE,
+                                               GL_RGBA, surf_width, surf_height,
+                                               GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV,
+                                               surface, 0);
+
+    CFRelease(surface);
+
+    if (cgl_err != kCGLNoError) {
+        COMP_LOG("importQueuedIOSurface: CGLTexImageIOSurface2D failed: " << cgl_err);
+        return false;
+    }
+
+    COMP_LOG("importQueuedIOSurface: done");
+    has_content_ = true;
+    return true;
+}
+
+#else
+// Linux: DMA-BUF import
 void OpenGLCompositor::queueDmaBuf(const AcceleratedPaintInfo& info) {
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -236,7 +421,7 @@ bool OpenGLCompositor::importQueuedDmaBuf() {
         return false;
     }
 
-    if (!dmabuf_supported_ || !egl_->hasDmaBufImport()) {
+    if (!dmabuf_supported_ || !ctx_->hasDmaBufImport()) {
         close(info.planes[0].fd);
         return false;
     }
@@ -258,7 +443,7 @@ bool OpenGLCompositor::importQueuedDmaBuf() {
         EGL_NONE
     };
 
-    EGLImage image = egl_->eglCreateImageKHR(egl_->display(), EGL_NO_CONTEXT,
+    EGLImage image = ctx_->eglCreateImageKHR(ctx_->display(), EGL_NO_CONTEXT,
                                                EGL_LINUX_DMA_BUF_EXT, nullptr, attribs);
 
     if (image == EGL_NO_IMAGE_KHR) {
@@ -271,19 +456,19 @@ bool OpenGLCompositor::importQueuedDmaBuf() {
 
     // Bind image to texture
     glBindTexture(GL_TEXTURE_2D, texture_);
-    egl_->glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, image);
+    ctx_->glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, image);
 
     GLenum err = glGetError();
     if (err != GL_NO_ERROR) {
         COMP_LOG("importQueuedDmaBuf: glEGLImageTargetTexture2DOES failed: 0x" << std::hex << err << std::dec);
-        egl_->eglDestroyImageKHR(egl_->display(), image);
+        ctx_->eglDestroyImageKHR(ctx_->display(), image);
         close(info.planes[0].fd);
         return false;
     }
 
     // Release oldest buffer in ring, store new one (triple buffering)
     if (images_[buffer_index_] != EGL_NO_IMAGE_KHR) {
-        egl_->eglDestroyImageKHR(egl_->display(), images_[buffer_index_]);
+        ctx_->eglDestroyImageKHR(ctx_->display(), images_[buffer_index_]);
     }
     if (dmabuf_fds_[buffer_index_] >= 0) {
         close(dmabuf_fds_[buffer_index_]);
@@ -296,9 +481,10 @@ bool OpenGLCompositor::importQueuedDmaBuf() {
     has_content_ = true;
     return true;
 }
+#endif
 
 void OpenGLCompositor::composite(uint32_t width, uint32_t height, float alpha) {
-    if (!has_content_ || !program_ || !texture_) {
+    if (!has_content_ || !program_) {
         return;
     }
 
@@ -308,11 +494,30 @@ void OpenGLCompositor::composite(uint32_t width, uint32_t height, float alpha) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
+#ifdef __APPLE__
+    // macOS: Use rectangle texture shader for IOSurface path
+    if (use_gpu_path_ && program_rect_ && texture_rect_) {
+        glUseProgram(program_rect_);
+        glUniform1f(alpha_loc_rect_, alpha);
+        glUniform2f(texsize_loc_rect_, static_cast<float>(pending_iosurface_width_),
+                    static_cast<float>(pending_iosurface_height_));
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_RECTANGLE, texture_rect_);
+    } else {
+        glUseProgram(program_);
+        glUniform1f(alpha_loc_, alpha);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, texture_);
+    }
+#else
     glUseProgram(program_);
     glUniform1f(alpha_loc_, alpha);
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture_);
+#endif
 
     glBindVertexArray(vao_);
     glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -330,6 +535,14 @@ void OpenGLCompositor::resize(uint32_t width, uint32_t height) {
 
     std::lock_guard<std::mutex> lock(mutex_);
 
+#ifdef __APPLE__
+    // Clear any pending IOSurface (stale after resize)
+    if (iosurface_queued_ && pending_iosurface_) {
+        CFRelease(pending_iosurface_);
+        pending_iosurface_ = nullptr;
+        iosurface_queued_ = false;
+    }
+#else
     // Clear any pending DMA-BUF (stale after resize)
     if (dmabuf_queued_ && !pending_dmabuf_.planes.empty()) {
         for (auto& plane : pending_dmabuf_.planes) {
@@ -345,7 +558,7 @@ void OpenGLCompositor::resize(uint32_t width, uint32_t height) {
     // Release all EGLImages in ring buffer
     for (int i = 0; i < NUM_BUFFERS; i++) {
         if (images_[i] != EGL_NO_IMAGE_KHR) {
-            egl_->eglDestroyImageKHR(egl_->display(), images_[i]);
+            ctx_->eglDestroyImageKHR(ctx_->display(), images_[i]);
             images_[i] = EGL_NO_IMAGE_KHR;
         }
         if (dmabuf_fds_[i] >= 0) {
@@ -354,6 +567,7 @@ void OpenGLCompositor::resize(uint32_t width, uint32_t height) {
         }
     }
     buffer_index_ = 0;
+#endif
 
     destroyTexture();
 
@@ -382,15 +596,29 @@ void OpenGLCompositor::destroyTexture() {
         glDeleteTextures(1, &texture_);
         texture_ = 0;
     }
+
+#ifdef __APPLE__
+    if (texture_rect_) {
+        glDeleteTextures(1, &texture_rect_);
+        texture_rect_ = 0;
+    }
+#endif
 }
 
 void OpenGLCompositor::cleanup() {
-    if (!egl_) return;
+    if (!ctx_) return;
 
+#ifdef __APPLE__
+    // Release any pending IOSurface
+    if (pending_iosurface_) {
+        CFRelease(pending_iosurface_);
+        pending_iosurface_ = nullptr;
+    }
+#else
     // Release all EGLImages in ring buffer
     for (int i = 0; i < NUM_BUFFERS; i++) {
         if (images_[i] != EGL_NO_IMAGE_KHR) {
-            egl_->eglDestroyImageKHR(egl_->display(), images_[i]);
+            ctx_->eglDestroyImageKHR(ctx_->display(), images_[i]);
             images_[i] = EGL_NO_IMAGE_KHR;
         }
         if (dmabuf_fds_[i] >= 0) {
@@ -398,6 +626,7 @@ void OpenGLCompositor::cleanup() {
             dmabuf_fds_[i] = -1;
         }
     }
+#endif
 
     destroyTexture();
 
@@ -405,10 +634,16 @@ void OpenGLCompositor::cleanup() {
         glDeleteProgram(program_);
         program_ = 0;
     }
+#ifdef __APPLE__
+    if (program_rect_) {
+        glDeleteProgram(program_rect_);
+        program_rect_ = 0;
+    }
+#endif
     if (vao_) {
         glDeleteVertexArrays(1, &vao_);
         vao_ = 0;
     }
 
-    egl_ = nullptr;
+    ctx_ = nullptr;
 }

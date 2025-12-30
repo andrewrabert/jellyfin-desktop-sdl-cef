@@ -26,7 +26,7 @@ if(WIN32)
 elseif(APPLE)
     set(CEF_LIBRARIES
         "${CEF_ROOT}/Release/Chromium Embedded Framework.framework"
-        "${CEF_ROOT}/libcef_dll_wrapper/libcef_dll_wrapper.a"
+        "${CEF_ROOT}/build/libcef_dll_wrapper/Release/libcef_dll_wrapper.a"
     )
 else() # Linux
     set(CEF_LIB_DIR "${CEF_ROOT}/Release")
@@ -37,7 +37,13 @@ else() # Linux
 endif()
 
 # Build wrapper library if not present
-if(NOT EXISTS "${CEF_ROOT}/build/libcef_dll_wrapper/libcef_dll_wrapper.a")
+if(APPLE)
+    set(CEF_WRAPPER_PATH "${CEF_ROOT}/build/libcef_dll_wrapper/Release/libcef_dll_wrapper.a")
+else()
+    set(CEF_WRAPPER_PATH "${CEF_ROOT}/build/libcef_dll_wrapper/libcef_dll_wrapper.a")
+endif()
+
+if(NOT EXISTS "${CEF_WRAPPER_PATH}")
     message(STATUS "Building libcef_dll_wrapper...")
     execute_process(
         COMMAND ${CMAKE_COMMAND} -B build -DCMAKE_BUILD_TYPE=Release

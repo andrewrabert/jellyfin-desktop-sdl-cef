@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.19)
 project(jellyfin-desktop-cef LANGUAGES C CXX)
 
+# Enable Objective-C++ on macOS
+if(APPLE)
+    enable_language(OBJCXX)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -30,16 +35,63 @@ find_package(SDL3 REQUIRED)
 # Vulkan (for video subsurface)
 find_package(Vulkan REQUIRED)
 
-# OpenGL/EGL (for main surface CEF overlay)
-find_package(OpenGL REQUIRED COMPONENTS EGL OpenGL)
-pkg_check_modules(WAYLAND_EGL REQUIRED wayland-egl)
-pkg_check_modules(LIBDRM REQUIRED libdrm)
+# Platform-specific dependencies
+if(APPLE)
+    # macOS: OpenGL via CGL, Metal frameworks
+    find_package(OpenGL REQUIRED)
+    find_library(COCOA_FRAMEWORK Cocoa REQUIRED)
+    find_library(METAL_FRAMEWORK Metal REQUIRED)
+    find_library(QUARTZCORE_FRAMEWORK QuartzCore REQUIRED)
+    find_library(IOSURFACE_FRAMEWORK IOSurface REQUIRED)
+
+    set(PLATFORM_SOURCES
+        src/cgl_context.mm
+        src/macos_layer.mm
+    )
+    set(PLATFORM_LIBRARIES
+        ${COCOA_FRAMEWORK}
+        ${METAL_FRAMEWORK}
+        ${QUARTZCORE_FRAMEWORK}
+        ${IOSURFACE_FRAMEWORK}
+        OpenGL::GL
+    )
+else()
+    # Linux: OpenGL/EGL, Wayland
+    find_package(OpenGL REQUIRED COMPONENTS EGL OpenGL)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(WAYLAND_EGL REQUIRED wayland-egl)
+    pkg_check_modules(LIBDRM REQUIRED libdrm)
+    pkg_check_modules(WAYLAND REQUIRED wayland-client)
+
+    set(PLATFORM_SOURCES
+        src/egl_context.cpp
+        src/wayland_subsurface.cpp
+        src/wayland-protocols/color-management-v1-code.c
+    )
+    set(PLATFORM_LIBRARIES
+        ${WAYLAND_LIBRARIES}
+        ${WAYLAND_EGL_LIBRARIES}
+        OpenGL::EGL
+        OpenGL::OpenGL
+    )
+    set(PLATFORM_INCLUDE_DIRS
+        ${WAYLAND_INCLUDE_DIRS}
+        ${WAYLAND_EGL_INCLUDE_DIRS}
+        ${LIBDRM_INCLUDE_DIRS}
+    )
+endif()
 
 # Build mpv from submodule using meson
 set(MPV_SOURCE_DIR "${CMAKE_SOURCE_DIR}/third_party/mpv")
 set(MPV_BUILD_DIR "${MPV_SOURCE_DIR}/build")
 
-if(NOT EXISTS "${MPV_BUILD_DIR}/libmpv.so")
+if(APPLE)
+    set(MPV_LIB_CHECK "${MPV_BUILD_DIR}/libmpv.dylib")
+else()
+    set(MPV_LIB_CHECK "${MPV_BUILD_DIR}/libmpv.so")
+endif()
+
+if(NOT EXISTS "${MPV_LIB_CHECK}")
     message(STATUS "Building mpv from submodule...")
     execute_process(
         COMMAND meson setup build --default-library=shared -Dlibmpv=true
@@ -60,33 +112,29 @@ if(NOT EXISTS "${MPV_BUILD_DIR}/libmpv.so")
 endif()
 
 set(MPV_INCLUDE_DIRS "${MPV_SOURCE_DIR}/include")
-set(MPV_LIBRARIES "${MPV_BUILD_DIR}/libmpv.so")
-
-# Wayland
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(WAYLAND REQUIRED wayland-client)
+if(APPLE)
+    set(MPV_LIBRARIES "${MPV_BUILD_DIR}/libmpv.dylib")
+else()
+    set(MPV_LIBRARIES "${MPV_BUILD_DIR}/libmpv.so")
+endif()
 
 add_executable(jellyfin-desktop
     src/main.cpp
     src/cef_app.cpp
     src/cef_client.cpp
-    src/egl_context.cpp
     src/opengl_compositor.cpp
     src/vulkan_context.cpp
     src/mpv_player_vk.cpp
-    src/wayland_subsurface.cpp
-    src/wayland-protocols/color-management-v1-code.c
     src/settings.cpp
     src/menu_overlay.cpp
+    ${PLATFORM_SOURCES}
 )
 
 target_include_directories(jellyfin-desktop PRIVATE
     ${CEF_INCLUDE_DIRS}
     ${MPV_INCLUDE_DIRS}
     ${Vulkan_INCLUDE_DIRS}
-    ${WAYLAND_INCLUDE_DIRS}
-    ${WAYLAND_EGL_INCLUDE_DIRS}
-    ${LIBDRM_INCLUDE_DIRS}
+    ${PLATFORM_INCLUDE_DIRS}
     ${CMAKE_SOURCE_DIR}/src
 )
 
@@ -94,11 +142,8 @@ target_link_libraries(jellyfin-desktop PRIVATE
     ${CEF_LIBRARIES}
     SDL3::SDL3
     ${MPV_LIBRARIES}
-    ${WAYLAND_LIBRARIES}
-    ${WAYLAND_EGL_LIBRARIES}
     Vulkan::Vulkan
-    OpenGL::EGL
-    OpenGL::OpenGL
+    ${PLATFORM_LIBRARIES}
 )
 
 # Linux RPATH configuration for libcef.so loading
@@ -131,8 +176,16 @@ add_custom_target(copy_resources ALL
 add_dependencies(jellyfin-desktop copy_resources)
 
 # Copy libmpv to build directory
-add_custom_command(TARGET jellyfin-desktop POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy
-        "${MPV_BUILD_DIR}/libmpv.so.2"
-        "$<TARGET_FILE_DIR:jellyfin-desktop>/libmpv.so.2"
-)
+if(APPLE)
+    add_custom_command(TARGET jellyfin-desktop POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+            "${MPV_BUILD_DIR}/libmpv.2.dylib"
+            "$<TARGET_FILE_DIR:jellyfin-desktop>/libmpv.2.dylib"
+    )
+else()
+    add_custom_command(TARGET jellyfin-desktop POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+            "${MPV_BUILD_DIR}/libmpv.so.2"
+            "$<TARGET_FILE_DIR:jellyfin-desktop>/libmpv.so.2"
+    )
+endif()

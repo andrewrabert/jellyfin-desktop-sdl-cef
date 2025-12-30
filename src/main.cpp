@@ -14,10 +14,17 @@
 #include "include/cef_browser.h"
 #include "include/cef_command_line.h"
 
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#include "cgl_context.h"
+#include "macos_layer.h"
+#else
 #include "egl_context.h"
+#include "wayland_subsurface.h"
+#endif
+
 #include "opengl_compositor.h"
 #include "mpv_player_vk.h"
-#include "wayland_subsurface.h"
 #include "cef_app.h"
 #include "cef_client.h"
 #include "menu_overlay.h"
@@ -88,7 +95,51 @@ int main(int argc, char* argv[]) {
 
     SDL_StartTextInput(window);
 
-    // Initialize EGL context for OpenGL rendering
+#ifdef __APPLE__
+    // macOS: Initialize CGL context for OpenGL rendering
+    CGLContext glctx;
+    if (!glctx.init(window)) {
+        std::cerr << "CGL init failed" << std::endl;
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+
+    // Initialize macOS layer for HDR video (uses MoltenVK)
+    MacOSVideoLayer videoLayer;
+    if (!videoLayer.init(window, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, 0,
+                         nullptr, 0, nullptr)) {
+        std::cerr << "Fatal: macOS video layer init failed" << std::endl;
+        return 1;
+    }
+    if (!videoLayer.createSwapchain(width, height)) {
+        std::cerr << "Fatal: macOS video layer swapchain failed" << std::endl;
+        return 1;
+    }
+    bool has_subsurface = true;
+    std::cout << "Using macOS CAMetalLayer for video (HDR: "
+              << (videoLayer.isHdr() ? "yes" : "no") << ")" << std::endl;
+
+    // Initialize mpv player (using video layer's Vulkan context)
+    MpvPlayerVk mpv;
+    bool has_video = false;
+    if (!mpv.init(nullptr, &videoLayer)) {
+        std::cerr << "MpvPlayerVk init failed" << std::endl;
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+
+    // Initialize OpenGL compositor for CEF overlay
+    OpenGLCompositor compositor;
+    if (!compositor.init(&glctx, width, height, use_gpu_overlay)) {
+        std::cerr << "OpenGLCompositor init failed" << std::endl;
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+#else
+    // Linux: Initialize EGL context for OpenGL rendering
     EGLContext_ egl;
     if (!egl.init(window)) {
         std::cerr << "EGL init failed" << std::endl;
@@ -130,6 +181,7 @@ int main(int argc, char* argv[]) {
         SDL_Quit();
         return 1;
     }
+#endif
 
     // Load settings
     Settings::instance().load();
@@ -140,7 +192,19 @@ int main(int argc, char* argv[]) {
     settings.no_sandbox = true;
     settings.multi_threaded_message_loop = true;
 
+#ifdef __APPLE__
+    // macOS: use _NSGetExecutablePath
+    char exe_buf[PATH_MAX];
+    uint32_t exe_size = sizeof(exe_buf);
+    std::filesystem::path exe_path;
+    if (_NSGetExecutablePath(exe_buf, &exe_size) == 0) {
+        exe_path = std::filesystem::canonical(exe_buf).parent_path();
+    } else {
+        exe_path = std::filesystem::current_path();
+    }
+#else
     std::filesystem::path exe_path = std::filesystem::canonical("/proc/self/exe").parent_path();
+#endif
     CefString(&settings.resources_dir_path).FromString(exe_path.string());
     CefString(&settings.locales_dir_path).FromString((exe_path / "locales").string());
 
@@ -213,10 +277,17 @@ int main(int argc, char* argv[]) {
             std::lock_guard<std::mutex> lock(cmd_mutex);
             pending_cmds.push_back({cmd, arg, intArg});
         },
+#ifdef __APPLE__
+        [&](IOSurfaceRef surface, int w, int h) {
+            // GPU accelerated paint - queue IOSurface for import in render loop
+            compositor.queueIOSurface(surface, w, h);
+        },
+#else
         [&](const AcceleratedPaintInfo& info) {
-            // GPU accelerated paint - queue for import in render loop
+            // GPU accelerated paint - queue DMA-BUF for import in render loop
             compositor.queueDmaBuf(info);
         },
+#endif
         &menu
     ));
 
@@ -369,6 +440,17 @@ int main(int argc, char* argv[]) {
                 current_width = event.window.data1;
                 current_height = event.window.data2;
 
+#ifdef __APPLE__
+                // Resize CGL context
+                glctx.resize(current_width, current_height);
+                compositor.resize(current_width, current_height);
+                client->resize(current_width, current_height);
+
+                // Resize video layer
+                if (has_subsurface) {
+                    videoLayer.resize(current_width, current_height);
+                }
+#else
                 // Resize EGL context (handles wl_egl_window resize)
                 egl.resize(current_width, current_height);
                 compositor.resize(current_width, current_height);
@@ -379,6 +461,7 @@ int main(int argc, char* argv[]) {
                     vkDeviceWaitIdle(subsurface.vkDevice());
                     subsurface.recreateSwapchain(current_width, current_height);
                 }
+#endif
 
                 auto resize_end = std::chrono::steady_clock::now();
                 std::cerr << "[" << _ms() << "ms] resize: total="
@@ -407,7 +490,11 @@ int main(int argc, char* argv[]) {
 
         // Determine if we need to render this frame
         // With vsync, always render to maintain consistent frame pacing
+#ifdef __APPLE__
+        needs_render = activity_this_frame || has_video || compositor.hasPendingContent() || compositor.hasPendingIOSurface();
+#else
         needs_render = activity_this_frame || has_video || compositor.hasPendingContent() || compositor.hasPendingDmaBuf();
+#endif
 
         if (activity_this_frame) {
             last_activity = now;
@@ -421,9 +508,15 @@ int main(int argc, char* argv[]) {
                     std::cout << "[MAIN] playerLoad: " << cmd.url << std::endl;
                     if (mpv.loadFile(cmd.url)) {
                         has_video = true;
+#ifdef __APPLE__
+                        if (has_subsurface && videoLayer.isHdr()) {
+                            // macOS EDR is automatic
+                        }
+#else
                         if (has_subsurface && subsurface.isHdr()) {
                             subsurface.setColorspace();
                         }
+#endif
                         client->emitPlaying();
                     } else {
                         client->emitError("Failed to load video");
@@ -479,7 +572,23 @@ int main(int argc, char* argv[]) {
         // Menu overlay blending
         menu.clearRedraw();
 
-        // Render video to subsurface
+        // Render video to subsurface/layer
+#ifdef __APPLE__
+        if (has_video && has_subsurface && mpv.hasFrame()) {
+            VkImage sub_image;
+            VkImageView sub_view;
+            VkFormat sub_format;
+            if (videoLayer.startFrame(&sub_image, &sub_view, &sub_format)) {
+                mpv.render(sub_image, sub_view,
+                          videoLayer.width(), videoLayer.height(),
+                          sub_format);
+                videoLayer.submitFrame();
+            }
+        }
+
+        // Import queued IOSurface if any (GPU path)
+        compositor.importQueuedIOSurface();
+#else
         if (has_video && has_subsurface && mpv.hasFrame()) {
             VkImage sub_image;
             VkImageView sub_view;
@@ -494,6 +603,7 @@ int main(int argc, char* argv[]) {
 
         // Import queued DMA-BUF if any (GPU path)
         compositor.importQueuedDmaBuf();
+#endif
 
         // Flush pending overlay data to GPU texture (software path)
         compositor.flushOverlay();
@@ -510,16 +620,27 @@ int main(int argc, char* argv[]) {
         }
 
         // Swap buffers
+#ifdef __APPLE__
+        glctx.swapBuffers();
+#else
         egl.swapBuffers();
+#endif
     }
 
     // Cleanup
     mpv.cleanup();
     compositor.cleanup();
+#ifdef __APPLE__
+    if (has_subsurface) {
+        videoLayer.cleanup();
+    }
+    glctx.cleanup();
+#else
     if (has_subsurface) {
         subsurface.cleanup();
     }
     egl.cleanup();
+#endif
 
     CefShutdown();
     SDL_DestroyWindow(window);

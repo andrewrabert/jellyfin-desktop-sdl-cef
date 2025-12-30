@@ -2,13 +2,23 @@
 #include "menu_overlay.h"
 #include "settings.h"
 #include <iostream>
+#ifndef __APPLE__
 #include <unistd.h>  // For dup()
+#endif
 
+#ifdef __APPLE__
+Client::Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg,
+               IOSurfacePaintCallback on_iosurface_paint, MenuOverlay* menu)
+    : width_(width), height_(height), on_paint_(std::move(on_paint)),
+      on_player_msg_(std::move(on_player_msg)), on_iosurface_paint_(std::move(on_iosurface_paint)),
+      menu_(menu) {}
+#else
 Client::Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg,
                AcceleratedPaintCallback on_accel_paint, MenuOverlay* menu)
     : width_(width), height_(height), on_paint_(std::move(on_paint)),
       on_player_msg_(std::move(on_player_msg)), on_accel_paint_(std::move(on_accel_paint)),
       menu_(menu) {}
+#endif
 
 bool Client::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
                                cef_log_severity_t level,
@@ -157,6 +167,13 @@ void Client::OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
 void Client::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
                                 const RectList& dirtyRects,
                                 const CefAcceleratedPaintInfo& info) {
+#ifdef __APPLE__
+    // macOS: IOSurface path
+    if (on_iosurface_paint_ && info.shared_texture_io_surface) {
+        on_iosurface_paint_(info.shared_texture_io_surface, width_, height_);
+    }
+#else
+    // Linux: DMA-BUF path
     if (on_accel_paint_) {
         AcceleratedPaintInfo paintInfo;
         paintInfo.width = width_;
@@ -175,6 +192,7 @@ void Client::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, PaintElementType 
 
         on_accel_paint_(paintInfo);
     }
+#endif
 }
 
 void Client::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
