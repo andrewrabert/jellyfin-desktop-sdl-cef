@@ -191,40 +191,11 @@ int main(int argc, char* argv[]) {
     std::mutex cmd_mutex;
     std::vector<PlayerCmd> pending_cmds;
 
-    // DMA-BUF import thread - non-blocking, processes latest frame
-    struct DmaBufImporter {
-        std::mutex mutex;
-        std::condition_variable cv;
-        AcceleratedPaintInfo info;
-        OpenGLCompositor* compositor = nullptr;
-        bool pending = false;
-        bool shutdown = false;
-    };
-    DmaBufImporter importer;
-    importer.compositor = &compositor;
-
     // Context menu overlay
     MenuOverlay menu;
     if (!menu.init()) {
         std::cerr << "Warning: Failed to init menu overlay (no font found)" << std::endl;
     }
-
-    std::thread import_thread([&importer]() {
-        while (true) {
-            AcceleratedPaintInfo local_info;
-            {
-                std::unique_lock<std::mutex> lock(importer.mutex);
-                importer.cv.wait(lock, [&] { return importer.pending || importer.shutdown; });
-                if (importer.shutdown) break;
-
-                // Grab the info and clear pending
-                local_info = std::move(importer.info);
-                importer.pending = false;
-            }
-            // Do the import outside the lock
-            importer.compositor->updateOverlayFromDmaBuf(local_info);
-        }
-    });
 
     CefRefPtr<Client> client(new Client(width, height,
         [&](const void* buffer, int w, int h) {
@@ -243,17 +214,8 @@ int main(int argc, char* argv[]) {
             pending_cmds.push_back({cmd, arg, intArg});
         },
         [&](const AcceleratedPaintInfo& info) {
-            // GPU accelerated paint - queue and return immediately (non-blocking)
-            std::lock_guard<std::mutex> lock(importer.mutex);
-            // If previous frame not yet processed, close its fd
-            if (importer.pending && !importer.info.planes.empty()) {
-                for (auto& plane : importer.info.planes) {
-                    if (plane.fd >= 0) close(plane.fd);
-                }
-            }
-            importer.info = info;
-            importer.pending = true;
-            importer.cv.notify_one();
+            // GPU accelerated paint - queue for import in render loop
+            compositor.queueDmaBuf(info);
         },
         &menu
     ));
@@ -323,7 +285,7 @@ int main(int argc, char* argv[]) {
         // Event-driven: wait for events when idle, poll when active
         SDL_Event event;
         bool have_event;
-        if (needs_render || has_video || compositor.hasPendingContent() || importer.pending) {
+        if (needs_render || has_video || compositor.hasPendingContent() || compositor.hasPendingDmaBuf()) {
             have_event = SDL_PollEvent(&event);
         } else {
             // Short wait - just yield CPU, don't block long (1ms for ~1000Hz max)
@@ -445,7 +407,7 @@ int main(int argc, char* argv[]) {
 
         // Determine if we need to render this frame
         // With vsync, always render to maintain consistent frame pacing
-        needs_render = activity_this_frame || has_video || compositor.hasPendingContent() || importer.pending;
+        needs_render = activity_this_frame || has_video || compositor.hasPendingContent() || compositor.hasPendingDmaBuf();
 
         if (activity_this_frame) {
             last_activity = now;
@@ -530,7 +492,10 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Flush pending overlay data to GPU texture
+        // Import queued DMA-BUF if any (GPU path)
+        compositor.importQueuedDmaBuf();
+
+        // Flush pending overlay data to GPU texture (software path)
         compositor.flushOverlay();
 
         // Clear main surface (transparent when video playing, black otherwise)
@@ -547,14 +512,6 @@ int main(int argc, char* argv[]) {
         // Swap buffers
         egl.swapBuffers();
     }
-
-    // Shutdown import thread
-    {
-        std::lock_guard<std::mutex> lock(importer.mutex);
-        importer.shutdown = true;
-    }
-    importer.cv.notify_one();
-    import_thread.join();
 
     // Cleanup
     mpv.cleanup();

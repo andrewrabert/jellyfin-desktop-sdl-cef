@@ -25,8 +25,11 @@ public:
     // Flush pending overlay data to GPU
     bool flushOverlay();
 
-    // Update overlay from DMA-BUF - hardware accelerated path
-    bool updateOverlayFromDmaBuf(const AcceleratedPaintInfo& info);
+    // Queue DMA-BUF for import (thread-safe, call from any thread)
+    void queueDmaBuf(const AcceleratedPaintInfo& info);
+
+    // Import queued DMA-BUF (must call from GL thread)
+    bool importQueuedDmaBuf();
 
     // Composite overlay to screen with alpha blending
     void composite(uint32_t width, uint32_t height, float alpha);
@@ -36,6 +39,9 @@ public:
 
     // Check if we have valid content to composite
     bool hasValidOverlay() const { return has_content_; }
+
+    // Check if there's a pending DMA-BUF to import
+    bool hasPendingDmaBuf() const { return dmabuf_queued_; }
 
 private:
     bool createTexture();
@@ -58,6 +64,8 @@ private:
 
     // DMA-BUF support
     bool dmabuf_supported_ = true;
+    AcceleratedPaintInfo pending_dmabuf_;
+    bool dmabuf_queued_ = false;
 
     // Thread safety
     std::mutex mutex_;

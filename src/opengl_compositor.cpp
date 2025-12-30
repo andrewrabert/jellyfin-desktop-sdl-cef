@@ -196,8 +196,28 @@ bool OpenGLCompositor::flushOverlay() {
     return true;
 }
 
-bool OpenGLCompositor::updateOverlayFromDmaBuf(const AcceleratedPaintInfo& info) {
+void OpenGLCompositor::queueDmaBuf(const AcceleratedPaintInfo& info) {
     std::lock_guard<std::mutex> lock(mutex_);
+
+    // Close previous queued fd if not yet imported
+    if (dmabuf_queued_ && !pending_dmabuf_.planes.empty()) {
+        for (auto& plane : pending_dmabuf_.planes) {
+            if (plane.fd >= 0) close(plane.fd);
+        }
+    }
+
+    pending_dmabuf_ = info;
+    dmabuf_queued_ = true;
+}
+
+bool OpenGLCompositor::importQueuedDmaBuf() {
+    AcceleratedPaintInfo info;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!dmabuf_queued_) return false;
+        info = std::move(pending_dmabuf_);
+        dmabuf_queued_ = false;
+    }
 
     if (info.planes.empty() || info.planes[0].fd < 0) {
         return false;
@@ -206,14 +226,14 @@ bool OpenGLCompositor::updateOverlayFromDmaBuf(const AcceleratedPaintInfo& info)
     // Skip DMA-BUF imports briefly after resize
     auto since_resize = std::chrono::steady_clock::now() - last_resize_time_;
     if (since_resize < std::chrono::milliseconds(150)) {
-        COMP_LOG("updateOverlayFromDmaBuf: skipping (resize cooldown)");
+        COMP_LOG("importQueuedDmaBuf: skipping (resize cooldown)");
         close(info.planes[0].fd);
         return false;
     }
 
     // Skip if size doesn't match
     if (static_cast<uint32_t>(info.width) != width_ || static_cast<uint32_t>(info.height) != height_) {
-        COMP_LOG("updateOverlayFromDmaBuf: " << info.width << "x" << info.height << " (want: " << width_ << "x" << height_ << ") - skipping");
+        COMP_LOG("importQueuedDmaBuf: " << info.width << "x" << info.height << " (want: " << width_ << "x" << height_ << ") - skipping");
         close(info.planes[0].fd);
         return false;
     }
@@ -223,7 +243,7 @@ bool OpenGLCompositor::updateOverlayFromDmaBuf(const AcceleratedPaintInfo& info)
         return false;
     }
 
-    COMP_LOG("updateOverlayFromDmaBuf: " << info.width << "x" << info.height);
+    COMP_LOG("importQueuedDmaBuf: " << info.width << "x" << info.height << " modifier=0x" << std::hex << info.modifier << std::dec);
 
     // Convert CEF format to DRM fourcc
     uint32_t drm_format = DRM_FORMAT_ARGB8888;  // Default, CEF typically uses BGRA
@@ -244,8 +264,9 @@ bool OpenGLCompositor::updateOverlayFromDmaBuf(const AcceleratedPaintInfo& info)
                                                EGL_LINUX_DMA_BUF_EXT, nullptr, attribs);
 
     if (image == EGL_NO_IMAGE_KHR) {
-        COMP_LOG("updateOverlayFromDmaBuf: eglCreateImageKHR failed");
-        dmabuf_supported_ = false;
+        EGLint err = eglGetError();
+        COMP_LOG("importQueuedDmaBuf: eglCreateImageKHR failed, EGL error: 0x" << std::hex << err << std::dec);
+        // Don't disable dmabuf_supported_ - might be transient
         close(info.planes[0].fd);
         return false;
     }
@@ -256,9 +277,8 @@ bool OpenGLCompositor::updateOverlayFromDmaBuf(const AcceleratedPaintInfo& info)
 
     GLenum err = glGetError();
     if (err != GL_NO_ERROR) {
-        COMP_LOG("updateOverlayFromDmaBuf: glEGLImageTargetTexture2DOES failed: " << err);
+        COMP_LOG("importQueuedDmaBuf: glEGLImageTargetTexture2DOES failed: 0x" << std::hex << err << std::dec);
         egl_->eglDestroyImageKHR(egl_->display(), image);
-        dmabuf_supported_ = false;
         close(info.planes[0].fd);
         return false;
     }
@@ -267,7 +287,7 @@ bool OpenGLCompositor::updateOverlayFromDmaBuf(const AcceleratedPaintInfo& info)
     egl_->eglDestroyImageKHR(egl_->display(), image);
     close(info.planes[0].fd);
 
-    COMP_LOG("updateOverlayFromDmaBuf: done");
+    COMP_LOG("importQueuedDmaBuf: done");
     has_content_ = true;
     return true;
 }
