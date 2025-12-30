@@ -64,12 +64,25 @@ bool OpenGLCompositor::createTexture() {
     // Allocate texture storage (BGRA format)
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width_, height_, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, nullptr);
 
-    // Allocate staging buffer
-    staging_buffer_.resize(width_ * height_ * 4);
+    // Create double-buffered PBOs for async upload
+    size_t pbo_size = width_ * height_ * 4;
+    glGenBuffers(2, pbos_);
+    for (int i = 0; i < 2; i++) {
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbos_[i]);
+        glBufferData(GL_PIXEL_UNPACK_BUFFER, pbo_size, nullptr, GL_STREAM_DRAW);
+    }
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+
+    // Map the first PBO for writing
+    current_pbo_ = 0;
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbos_[current_pbo_]);
+    pbo_mapped_ = glMapBufferRange(GL_PIXEL_UNPACK_BUFFER, 0, pbo_size,
+                                    GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 
     GLenum err = glGetError();
     if (err != GL_NO_ERROR) {
-        std::cerr << "[GLCompositor] Failed to create texture: " << err << std::endl;
+        std::cerr << "[GLCompositor] Failed to create texture/PBOs: " << err << std::endl;
         return false;
     }
 
@@ -141,15 +154,17 @@ void OpenGLCompositor::updateOverlay(const void* data, int width, int height) {
         return;
     }
 
-    std::memcpy(staging_buffer_.data(), data, width * height * 4);
-    staging_pending_ = true;
+    if (pbo_mapped_) {
+        std::memcpy(pbo_mapped_, data, width * height * 4);
+        staging_pending_ = true;
+    }
 }
 
 void* OpenGLCompositor::getStagingBuffer(int width, int height) {
     if (width != static_cast<int>(width_) || height != static_cast<int>(height_)) {
         return nullptr;
     }
-    return staging_buffer_.data();
+    return pbo_mapped_;
 }
 
 bool OpenGLCompositor::flushOverlay() {
@@ -159,8 +174,22 @@ bool OpenGLCompositor::flushOverlay() {
         return false;
     }
 
+    size_t pbo_size = width_ * height_ * 4;
+
+    // Unmap current PBO and start async DMA transfer to texture
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbos_[current_pbo_]);
+    glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
+
     glBindTexture(GL_TEXTURE_2D, texture_);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width_, height_, GL_BGRA_EXT, GL_UNSIGNED_BYTE, staging_buffer_.data());
+    // With PBO bound, last arg is offset into PBO, not pointer
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width_, height_, GL_BGRA_EXT, GL_UNSIGNED_BYTE, nullptr);
+
+    // Swap to next PBO and map it for next frame's writes
+    current_pbo_ = 1 - current_pbo_;
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbos_[current_pbo_]);
+    pbo_mapped_ = glMapBufferRange(GL_PIXEL_UNPACK_BUFFER, 0, pbo_size,
+                                    GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 
     staging_pending_ = false;
     has_content_ = true;
@@ -288,11 +317,22 @@ void OpenGLCompositor::resize(uint32_t width, uint32_t height) {
 }
 
 void OpenGLCompositor::destroyTexture() {
+    // Unmap and delete PBOs
+    if (pbo_mapped_) {
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbos_[current_pbo_]);
+        glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
+        pbo_mapped_ = nullptr;
+    }
+    if (pbos_[0]) {
+        glDeleteBuffers(2, pbos_);
+        pbos_[0] = pbos_[1] = 0;
+    }
+    current_pbo_ = 0;
+
     if (texture_) {
         glDeleteTextures(1, &texture_);
         texture_ = 0;
     }
-    staging_buffer_.clear();
 }
 
 void OpenGLCompositor::cleanup() {

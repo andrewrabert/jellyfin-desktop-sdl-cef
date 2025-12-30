@@ -50,8 +50,10 @@ private:
     GLuint texture_ = 0;
     bool has_content_ = false;
 
-    // Staging buffer for software path
-    std::vector<uint8_t> staging_buffer_;
+    // Double-buffered PBOs for async texture upload
+    GLuint pbos_[2] = {0, 0};
+    int current_pbo_ = 0;
+    void* pbo_mapped_ = nullptr;
     bool staging_pending_ = false;
 
     // DMA-BUF support
