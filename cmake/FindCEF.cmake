@@ -53,8 +53,9 @@ if(NOT EXISTS "${CEF_WRAPPER_PATH}")
     if(NOT CEF_CONFIG_RESULT EQUAL 0)
         message(FATAL_ERROR "Failed to configure CEF")
     endif()
+    # Limit parallelism - CEF wrapper builds OOM with unlimited -j even on 16GB RAM
     execute_process(
-        COMMAND ${CMAKE_COMMAND} --build build --target libcef_dll_wrapper -j
+        COMMAND ${CMAKE_COMMAND} --build build --target libcef_dll_wrapper -j2
         WORKING_DIRECTORY ${CEF_ROOT}
         RESULT_VARIABLE CEF_BUILD_RESULT
     )
