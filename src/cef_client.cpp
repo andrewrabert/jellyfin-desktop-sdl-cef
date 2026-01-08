@@ -8,16 +8,18 @@
 
 #ifdef __APPLE__
 Client::Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg,
-               IOSurfacePaintCallback on_iosurface_paint, MenuOverlay* menu)
+               IOSurfacePaintCallback on_iosurface_paint, MenuOverlay* menu,
+               CursorChangeCallback on_cursor_change)
     : width_(width), height_(height), on_paint_(std::move(on_paint)),
       on_player_msg_(std::move(on_player_msg)), on_iosurface_paint_(std::move(on_iosurface_paint)),
-      menu_(menu) {}
+      menu_(menu), on_cursor_change_(std::move(on_cursor_change)) {}
 #else
 Client::Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg,
-               AcceleratedPaintCallback on_accel_paint, MenuOverlay* menu)
+               AcceleratedPaintCallback on_accel_paint, MenuOverlay* menu,
+               CursorChangeCallback on_cursor_change)
     : width_(width), height_(height), on_paint_(std::move(on_paint)),
       on_player_msg_(std::move(on_player_msg)), on_accel_paint_(std::move(on_accel_paint)),
-      menu_(menu) {}
+      menu_(menu), on_cursor_change_(std::move(on_cursor_change)) {}
 #endif
 
 bool Client::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
@@ -35,6 +37,16 @@ bool Client::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
     }
     std::cerr << "[JS:" << levelStr << "] " << message.ToString() << std::endl;
     return false;  // Allow default handling too
+}
+
+bool Client::OnCursorChange(CefRefPtr<CefBrowser> browser,
+                            CefCursorHandle cursor,
+                            cef_cursor_type_t type,
+                            const CefCursorInfo& custom_cursor_info) {
+    if (on_cursor_change_) {
+        on_cursor_change_(type);
+    }
+    return true;  // We handled it
 }
 
 bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,

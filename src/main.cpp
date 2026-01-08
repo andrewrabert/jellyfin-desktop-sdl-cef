@@ -47,6 +47,39 @@ int sdlModsToCef(SDL_Keymod sdlMods) {
     return cef;
 }
 
+// Map CEF cursor type to SDL system cursor
+SDL_SystemCursor cefCursorToSDL(cef_cursor_type_t type) {
+    switch (type) {
+        case CT_POINTER: return SDL_SYSTEM_CURSOR_DEFAULT;
+        case CT_CROSS: return SDL_SYSTEM_CURSOR_CROSSHAIR;
+        case CT_HAND: return SDL_SYSTEM_CURSOR_POINTER;
+        case CT_IBEAM: return SDL_SYSTEM_CURSOR_TEXT;
+        case CT_WAIT: return SDL_SYSTEM_CURSOR_WAIT;
+        case CT_HELP: return SDL_SYSTEM_CURSOR_DEFAULT;  // No help cursor in SDL
+        case CT_EASTRESIZE: return SDL_SYSTEM_CURSOR_E_RESIZE;
+        case CT_NORTHRESIZE: return SDL_SYSTEM_CURSOR_N_RESIZE;
+        case CT_NORTHEASTRESIZE: return SDL_SYSTEM_CURSOR_NE_RESIZE;
+        case CT_NORTHWESTRESIZE: return SDL_SYSTEM_CURSOR_NW_RESIZE;
+        case CT_SOUTHRESIZE: return SDL_SYSTEM_CURSOR_S_RESIZE;
+        case CT_SOUTHEASTRESIZE: return SDL_SYSTEM_CURSOR_SE_RESIZE;
+        case CT_SOUTHWESTRESIZE: return SDL_SYSTEM_CURSOR_SW_RESIZE;
+        case CT_WESTRESIZE: return SDL_SYSTEM_CURSOR_W_RESIZE;
+        case CT_NORTHSOUTHRESIZE: return SDL_SYSTEM_CURSOR_NS_RESIZE;
+        case CT_EASTWESTRESIZE: return SDL_SYSTEM_CURSOR_EW_RESIZE;
+        case CT_NORTHEASTSOUTHWESTRESIZE: return SDL_SYSTEM_CURSOR_NESW_RESIZE;
+        case CT_NORTHWESTSOUTHEASTRESIZE: return SDL_SYSTEM_CURSOR_NWSE_RESIZE;
+        case CT_COLUMNRESIZE: return SDL_SYSTEM_CURSOR_EW_RESIZE;
+        case CT_ROWRESIZE: return SDL_SYSTEM_CURSOR_NS_RESIZE;
+        case CT_MOVE: return SDL_SYSTEM_CURSOR_MOVE;
+        case CT_PROGRESS: return SDL_SYSTEM_CURSOR_PROGRESS;
+        case CT_NODROP: return SDL_SYSTEM_CURSOR_NOT_ALLOWED;
+        case CT_NOTALLOWED: return SDL_SYSTEM_CURSOR_NOT_ALLOWED;
+        case CT_GRAB: return SDL_SYSTEM_CURSOR_POINTER;
+        case CT_GRABBING: return SDL_SYSTEM_CURSOR_POINTER;
+        default: return SDL_SYSTEM_CURSOR_DEFAULT;
+    }
+}
+
 static auto _main_start = std::chrono::steady_clock::now();
 inline long _ms() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - _main_start).count(); }
 
@@ -261,6 +294,9 @@ int main(int argc, char* argv[]) {
         std::cerr << "Warning: Failed to init menu overlay (no font found)" << std::endl;
     }
 
+    // Cursor state
+    SDL_Cursor* current_cursor = nullptr;
+
     CefRefPtr<Client> client(new Client(width, height,
         [&](const void* buffer, int w, int h) {
             // Copy directly to compositor staging buffer (single memcpy)
@@ -288,7 +324,15 @@ int main(int argc, char* argv[]) {
             compositor.queueDmaBuf(info);
         },
 #endif
-        &menu
+        &menu,
+        [&](cef_cursor_type_t type) {
+            SDL_SystemCursor sdl_type = cefCursorToSDL(type);
+            if (current_cursor) {
+                SDL_DestroyCursor(current_cursor);
+            }
+            current_cursor = SDL_CreateSystemCursor(sdl_type);
+            SDL_SetCursor(current_cursor);
+        }
     ));
 
     CefWindowInfo window_info;
@@ -643,6 +687,9 @@ int main(int argc, char* argv[]) {
 #endif
 
     CefShutdown();
+    if (current_cursor) {
+        SDL_DestroyCursor(current_cursor);
+    }
     SDL_DestroyWindow(window);
     SDL_Quit();
 

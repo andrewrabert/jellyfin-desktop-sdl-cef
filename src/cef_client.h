@@ -18,6 +18,9 @@ class MenuOverlay;
 // Message callback for player commands from renderer
 using PlayerMessageCallback = std::function<void(const std::string& cmd, const std::string& arg, int intArg)>;
 
+// Cursor change callback (passes CEF cursor type)
+using CursorChangeCallback = std::function<void(cef_cursor_type_t type)>;
+
 #ifdef __APPLE__
 // macOS: IOSurface callback
 using IOSurfacePaintCallback = std::function<void(IOSurfaceRef surface, int width, int height)>;
@@ -47,10 +50,12 @@ public:
 
 #ifdef __APPLE__
     Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg = nullptr,
-           IOSurfacePaintCallback on_iosurface_paint = nullptr, MenuOverlay* menu = nullptr);
+           IOSurfacePaintCallback on_iosurface_paint = nullptr, MenuOverlay* menu = nullptr,
+           CursorChangeCallback on_cursor_change = nullptr);
 #else
     Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg = nullptr,
-           AcceleratedPaintCallback on_accel_paint = nullptr, MenuOverlay* menu = nullptr);
+           AcceleratedPaintCallback on_accel_paint = nullptr, MenuOverlay* menu = nullptr,
+           CursorChangeCallback on_cursor_change = nullptr);
 #endif
 
     // CefClient
@@ -70,6 +75,10 @@ public:
                           const CefString& message,
                           const CefString& source,
                           int line) override;
+    bool OnCursorChange(CefRefPtr<CefBrowser> browser,
+                        CefCursorHandle cursor,
+                        cef_cursor_type_t type,
+                        const CefCursorInfo& custom_cursor_info) override;
 
     // CefRenderHandler
     void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override;
@@ -129,6 +138,7 @@ private:
     AcceleratedPaintCallback on_accel_paint_;
 #endif
     MenuOverlay* menu_ = nullptr;
+    CursorChangeCallback on_cursor_change_;
     std::atomic<bool> is_closed_ = false;
     CefRefPtr<CefBrowser> browser_;
 
