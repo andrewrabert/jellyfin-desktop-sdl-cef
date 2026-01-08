@@ -2,6 +2,13 @@
 
 Jellyfin client using CEF for web UI, mpv/libplacebo for video playback with HDR support.
 
+## Supported Platforms
+
+Currently:
+
+- **Linux** - Wayland only (no X11 support)
+- **macOS** - Apple Silicon and Intel
+
 ## Architecture
 
 - **CEF** (Chromium Embedded Framework) - windowless browser for Jellyfin web UI
