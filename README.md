@@ -82,4 +82,4 @@ cmake --build build
 ### Options
 
 - `--video <path>` - Load video directly (for testing)
-- `--gpu-overlay` - Enable DMA-BUF shared textures for CEF (experimental)
+- `--gpu-overlay` - Enable DMA-BUF shared textures for CEF (experimental - works, but can crash the amdgpu kernel module)
