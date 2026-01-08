@@ -1,6 +1,6 @@
 # Jellyfin Desktop CEF
 
-Native Jellyfin client using CEF for web UI, mpv/libplacebo for video playback with HDR support.
+Jellyfin client using CEF for web UI, mpv/libplacebo for video playback with HDR support.
 
 ## Architecture
 
