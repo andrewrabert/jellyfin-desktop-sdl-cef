@@ -116,7 +116,15 @@ bool MpvPlayerVk::init(VulkanContext* vk, WaylandSubsurface* subsurface) {
     return true;
 }
 
-bool MpvPlayerVk::loadFile(const std::string& path) {
+bool MpvPlayerVk::loadFile(const std::string& path, double startSeconds) {
+    // Set start position before loading (mpv uses this for the next file)
+    if (startSeconds > 0.0) {
+        std::string startStr = std::to_string(startSeconds);
+        mpv_set_option_string(mpv_, "start", startStr.c_str());
+    } else {
+        mpv_set_option_string(mpv_, "start", "0");
+    }
+
     const char* cmd[] = {"loadfile", path.c_str(), nullptr};
     int ret = mpv_command(mpv_, cmd);
     if (ret >= 0) {

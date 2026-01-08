@@ -550,8 +550,9 @@ int main(int argc, char* argv[]) {
             std::lock_guard<std::mutex> lock(cmd_mutex);
             for (const auto& cmd : pending_cmds) {
                 if (cmd.cmd == "load") {
-                    std::cerr << "[MAIN] playerLoad: " << cmd.url << std::endl;
-                    if (mpv.loadFile(cmd.url)) {
+                    double startSec = static_cast<double>(cmd.intArg) / 1000.0;
+                    std::cerr << "[MAIN] playerLoad: " << cmd.url << " start=" << startSec << "s" << std::endl;
+                    if (mpv.loadFile(cmd.url, startSec)) {
                         has_video = true;
 #ifdef __APPLE__
                         if (has_subsurface && videoLayer.isHdr()) {

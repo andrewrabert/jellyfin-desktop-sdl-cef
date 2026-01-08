@@ -18,7 +18,7 @@ public:
 
     bool init(VulkanContext* vk, WaylandSubsurface* subsurface = nullptr);
     void cleanup();
-    bool loadFile(const std::string& path);
+    bool loadFile(const std::string& path, double startSeconds = 0.0);
 
     // Check if mpv has a new frame ready to render
     bool hasFrame() const;
