@@ -86,13 +86,14 @@ set(MPV_SOURCE_DIR "${CMAKE_SOURCE_DIR}/third_party/mpv")
 set(MPV_BUILD_DIR "${MPV_SOURCE_DIR}/build")
 
 if(APPLE)
-    set(MPV_LIB_CHECK "${MPV_BUILD_DIR}/libmpv.dylib")
+    set(MPV_LIBRARY "${MPV_BUILD_DIR}/libmpv.dylib")
 else()
-    set(MPV_LIB_CHECK "${MPV_BUILD_DIR}/libmpv.so")
+    set(MPV_LIBRARY "${MPV_BUILD_DIR}/libmpv.so")
 endif()
 
-if(NOT EXISTS "${MPV_LIB_CHECK}")
-    message(STATUS "Building mpv from submodule...")
+# Configure meson if not yet configured
+if(NOT EXISTS "${MPV_BUILD_DIR}/build.ninja")
+    message(STATUS "Configuring mpv with meson...")
     execute_process(
         COMMAND meson setup build --default-library=shared -Dlibmpv=true
         WORKING_DIRECTORY ${MPV_SOURCE_DIR}
@@ -101,22 +102,17 @@ if(NOT EXISTS "${MPV_LIB_CHECK}")
     if(NOT MPV_SETUP_RESULT EQUAL 0)
         message(FATAL_ERROR "Failed to configure mpv with meson")
     endif()
-    execute_process(
-        COMMAND meson compile -C build
-        WORKING_DIRECTORY ${MPV_SOURCE_DIR}
-        RESULT_VARIABLE MPV_BUILD_RESULT
-    )
-    if(NOT MPV_BUILD_RESULT EQUAL 0)
-        message(FATAL_ERROR "Failed to build mpv")
-    endif()
 endif()
 
+# Custom target that always invokes meson compile (meson handles incremental builds)
+add_custom_target(mpv_build
+    COMMAND meson compile -C build
+    WORKING_DIRECTORY ${MPV_SOURCE_DIR}
+    COMMENT "Building mpv (meson handles incremental builds)"
+)
+
 set(MPV_INCLUDE_DIRS "${MPV_SOURCE_DIR}/include")
-if(APPLE)
-    set(MPV_LIBRARIES "${MPV_BUILD_DIR}/libmpv.dylib")
-else()
-    set(MPV_LIBRARIES "${MPV_BUILD_DIR}/libmpv.so")
-endif()
+set(MPV_LIBRARIES "${MPV_LIBRARY}")
 
 add_executable(jellyfin-desktop
     src/main.cpp
@@ -173,7 +169,7 @@ add_custom_target(copy_resources ALL
     DEPENDS ${RESOURCE_FILES}
     COMMENT "Copying resources"
 )
-add_dependencies(jellyfin-desktop copy_resources)
+add_dependencies(jellyfin-desktop mpv_build copy_resources)
 
 # Copy libmpv to build directory
 if(APPLE)

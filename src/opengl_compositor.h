@@ -13,6 +13,7 @@ typedef EGLContext_ GLContext;
 
 #include "cef_client.h"  // For AcceleratedPaintInfo
 #include <mutex>
+#include <vector>
 #include <chrono>
 
 class OpenGLCompositor {
@@ -51,7 +52,7 @@ public:
     bool importQueuedDmaBuf();
 
     // Check if there's a pending DMA-BUF to import
-    bool hasPendingDmaBuf() const { return dmabuf_queued_; }
+    bool hasPendingDmaBuf() const { return !pending_dmabufs_.empty(); }
 #endif
 
     // Composite overlay to screen with alpha blending
@@ -95,12 +96,12 @@ private:
 #else
     // DMA-BUF support (Linux, triple buffered)
     bool dmabuf_supported_ = true;
-    AcceleratedPaintInfo pending_dmabuf_;
-    bool dmabuf_queued_ = false;
+    std::vector<AcceleratedPaintInfo> pending_dmabufs_;
     static constexpr int NUM_BUFFERS = 3;
     EGLImage images_[NUM_BUFFERS] = {EGL_NO_IMAGE_KHR, EGL_NO_IMAGE_KHR, EGL_NO_IMAGE_KHR};
     int dmabuf_fds_[NUM_BUFFERS] = {-1, -1, -1};
     int buffer_index_ = 0;
+    std::chrono::steady_clock::time_point last_resize_time_;
 #endif
 
     // Thread safety

@@ -389,35 +389,57 @@ bool OpenGLCompositor::importQueuedIOSurface() {
 // Linux: DMA-BUF import
 void OpenGLCompositor::queueDmaBuf(const AcceleratedPaintInfo& info) {
     std::lock_guard<std::mutex> lock(mutex_);
-
-    // Close previous queued fd if not yet imported
-    if (dmabuf_queued_ && !pending_dmabuf_.planes.empty()) {
-        for (auto& plane : pending_dmabuf_.planes) {
-            if (plane.fd >= 0) close(plane.fd);
-        }
-    }
-
-    pending_dmabuf_ = info;
-    dmabuf_queued_ = true;
+    COMP_LOG("queueDmaBuf: fd=" << info.planes[0].fd << " size=" << info.width << "x" << info.height << " pending=" << pending_dmabufs_.size());
+    pending_dmabufs_.push_back(info);
 }
 
 bool OpenGLCompositor::importQueuedDmaBuf() {
     AcceleratedPaintInfo info;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!dmabuf_queued_) return false;
-        info = std::move(pending_dmabuf_);
-        dmabuf_queued_ = false;
+
+        if (pending_dmabufs_.empty()) return false;
+
+        // Wait 200ms after resize before importing (CEF needs time to stabilize)
+        auto now = std::chrono::steady_clock::now();
+        auto since_resize = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_resize_time_).count();
+        if (since_resize < 200) {
+            // Clear all pending - they're from the unstable period
+            for (auto& dmabuf : pending_dmabufs_) {
+                for (auto& plane : dmabuf.planes) {
+                    if (plane.fd >= 0) close(plane.fd);
+                }
+            }
+            pending_dmabufs_.clear();
+            return false;
+        }
+
+        // Find first entry matching current size
+        auto it = pending_dmabufs_.begin();
+        for (; it != pending_dmabufs_.end(); ++it) {
+            if (static_cast<uint32_t>(it->width) == width_ &&
+                static_cast<uint32_t>(it->height) == height_) break;
+        }
+
+        if (it == pending_dmabufs_.end()) {
+            // No match yet - keep waiting
+            return false;
+        }
+
+        // Close everything before the match (stale sizes)
+        for (auto i = pending_dmabufs_.begin(); i != it; ++i) {
+            COMP_LOG("importQueuedDmaBuf: closing stale fd=" << i->planes[0].fd << " size=" << i->width << "x" << i->height);
+            for (auto& plane : i->planes) {
+                if (plane.fd >= 0) close(plane.fd);
+            }
+        }
+
+        // Extract the matching entry
+        info = std::move(*it);
+        pending_dmabufs_.erase(pending_dmabufs_.begin(), it + 1);
     }
 
     if (info.planes.empty() || info.planes[0].fd < 0) {
-        return false;
-    }
-
-    // Skip if size doesn't match
-    if (static_cast<uint32_t>(info.width) != width_ || static_cast<uint32_t>(info.height) != height_) {
-        COMP_LOG("importQueuedDmaBuf: " << info.width << "x" << info.height << " (want: " << width_ << "x" << height_ << ") - skipping");
-        close(info.planes[0].fd);
         return false;
     }
 
@@ -426,7 +448,7 @@ bool OpenGLCompositor::importQueuedDmaBuf() {
         return false;
     }
 
-    COMP_LOG("importQueuedDmaBuf: " << info.width << "x" << info.height << " modifier=0x" << std::hex << info.modifier << std::dec);
+    COMP_LOG("importQueuedDmaBuf: fd=" << info.planes[0].fd << " size=" << info.width << "x" << info.height << " stride=" << info.planes[0].stride << " offset=" << info.planes[0].offset << " modifier=0x" << std::hex << info.modifier << std::dec);
 
     // Convert CEF format to DRM fourcc
     uint32_t drm_format = DRM_FORMAT_ARGB8888;  // Default, CEF typically uses BGRA
@@ -543,14 +565,8 @@ void OpenGLCompositor::resize(uint32_t width, uint32_t height) {
         iosurface_queued_ = false;
     }
 #else
-    // Clear any pending DMA-BUF (stale after resize)
-    if (dmabuf_queued_ && !pending_dmabuf_.planes.empty()) {
-        for (auto& plane : pending_dmabuf_.planes) {
-            if (plane.fd >= 0) close(plane.fd);
-        }
-        pending_dmabuf_.planes.clear();
-        dmabuf_queued_ = false;
-    }
+    // Don't close pending_dmabufs_ here - they'll be cleaned up when a
+    // matching frame arrives in importQueuedDmaBuf()
 
     // Wait for GPU to finish using current buffers before releasing
     glFinish();
@@ -567,6 +583,7 @@ void OpenGLCompositor::resize(uint32_t width, uint32_t height) {
         }
     }
     buffer_index_ = 0;
+    last_resize_time_ = std::chrono::steady_clock::now();
 #endif
 
     destroyTexture();
@@ -626,6 +643,15 @@ void OpenGLCompositor::cleanup() {
             dmabuf_fds_[i] = -1;
         }
     }
+
+    // Drain pending DMA-BUF list
+    for (auto& info : pending_dmabufs_) {
+        COMP_LOG("cleanup: closing fd=" << info.planes[0].fd << " size=" << info.width << "x" << info.height);
+        for (auto& plane : info.planes) {
+            if (plane.fd >= 0) close(plane.fd);
+        }
+    }
+    pending_dmabufs_.clear();
 #endif
 
     destroyTexture();
