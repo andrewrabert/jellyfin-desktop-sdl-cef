@@ -1,8 +1,9 @@
 # Build
 build/
 
-# CEF binary distribution
-third_party/cef*
+# Third-party dependencies (except submodules)
+third_party/*
+!third_party/mpv
 
 # IDE
 .vscode/
