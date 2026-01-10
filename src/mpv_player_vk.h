@@ -1,7 +1,13 @@
 #pragma once
 
 #include "vulkan_context.h"
+#ifdef __APPLE__
+#include "macos_layer.h"
+using VideoSurface = MacOSVideoLayer;
+#else
 #include "wayland_subsurface.h"
+using VideoSurface = WaylandSubsurface;
+#endif
 #include <string>
 #include <functional>
 #include <atomic>
@@ -16,7 +22,7 @@ public:
     MpvPlayerVk();
     ~MpvPlayerVk();
 
-    bool init(VulkanContext* vk, WaylandSubsurface* subsurface = nullptr);
+    bool init(VulkanContext* vk, VideoSurface* subsurface = nullptr);
     void cleanup();
     bool loadFile(const std::string& path, double startSeconds = 0.0);
 
@@ -45,13 +51,13 @@ public:
     void clearRedrawFlag() { needs_redraw_ = false; }
 
     bool isHdr() const { return subsurface_ && subsurface_->isHdr(); }
-    WaylandSubsurface* subsurface() const { return subsurface_; }
+    VideoSurface* subsurface() const { return subsurface_; }
 
 private:
     static void onMpvRedraw(void* ctx);
 
     VulkanContext* vk_ = nullptr;
-    WaylandSubsurface* subsurface_ = nullptr;
+    VideoSurface* subsurface_ = nullptr;
     mpv_handle* mpv_ = nullptr;
     mpv_render_context* render_ctx_ = nullptr;
 

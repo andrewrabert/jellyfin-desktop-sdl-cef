@@ -105,6 +105,17 @@ void Client::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
     rect.Set(0, 0, width_, height_);
 }
 
+bool Client::GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo& screen_info) {
+    // Force 1.0 scale factor to avoid Retina 2x rendering
+    screen_info.device_scale_factor = 1.0f;
+    screen_info.depth = 32;
+    screen_info.depth_per_component = 8;
+    screen_info.is_monochrome = false;
+    screen_info.rect = CefRect(0, 0, width_, height_);
+    screen_info.available_rect = screen_info.rect;
+    return true;
+}
+
 void Client::OnPopupShow(CefRefPtr<CefBrowser> browser, bool show) {
     popup_visible_ = show;
     if (!show) {
@@ -182,7 +193,7 @@ void Client::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, PaintElementType 
 #ifdef __APPLE__
     // macOS: IOSurface path
     if (on_iosurface_paint_ && info.shared_texture_io_surface) {
-        on_iosurface_paint_(info.shared_texture_io_surface, width_, height_);
+        on_iosurface_paint_(static_cast<IOSurfaceRef>(info.shared_texture_io_surface), width_, height_);
     }
 #else
     // Linux: DMA-BUF path
@@ -265,13 +276,14 @@ void Client::sendMouseClick(int x, int y, bool down, int button, int clickCount,
     browser_->GetHost()->SendMouseClickEvent(event, btn_type, !down, clickCount);
 }
 
-// Map SDL keycodes to Windows virtual key codes
+// Map SDL keycodes to Windows virtual key codes (used by CEF cross-platform)
 static int sdlKeyToWindows(int sdlKey) {
     switch (sdlKey) {
         case 0x08: return 0x08;  // SDLK_BACKSPACE -> VK_BACK
         case 0x09: return 0x09;  // SDLK_TAB -> VK_TAB
         case 0x0D: return 0x0D;  // SDLK_RETURN -> VK_RETURN
         case 0x1B: return 0x1B;  // SDLK_ESCAPE -> VK_ESCAPE
+        case 0x20: return 0x20;  // SDLK_SPACE -> VK_SPACE
         case 0x7F: return 0x2E;  // SDLK_DELETE -> VK_DELETE
         case 0x40000050: return 0x25;  // SDLK_LEFT -> VK_LEFT
         case 0x4000004F: return 0x27;  // SDLK_RIGHT -> VK_RIGHT
@@ -283,7 +295,7 @@ static int sdlKeyToWindows(int sdlKey) {
         case 0x4000004E: return 0x22;  // SDLK_PAGEDOWN -> VK_NEXT
         case 0x4000003A: return 0x74;  // SDLK_F5 -> VK_F5
         case 0x40000044: return 0x7A;  // SDLK_F11 -> VK_F11
-        // Letters for Ctrl+key combos (SDL uses lowercase)
+        // Letters for Ctrl/Cmd+key combos (SDL uses lowercase)
         case 'a': return 'A';
         case 'c': return 'C';
         case 'v': return 'V';
@@ -294,11 +306,47 @@ static int sdlKeyToWindows(int sdlKey) {
     }
 }
 
+#ifdef __APPLE__
+// Map SDL keycodes to Mac virtual key codes (Carbon kVK_* values)
+static int sdlKeyToMacNative(int sdlKey) {
+    switch (sdlKey) {
+        case 0x08: return 0x33;  // SDLK_BACKSPACE -> kVK_Delete
+        case 0x09: return 0x30;  // SDLK_TAB -> kVK_Tab
+        case 0x0D: return 0x24;  // SDLK_RETURN -> kVK_Return
+        case 0x1B: return 0x35;  // SDLK_ESCAPE -> kVK_Escape
+        case 0x20: return 0x31;  // SDLK_SPACE -> kVK_Space
+        case 0x7F: return 0x75;  // SDLK_DELETE -> kVK_ForwardDelete
+        case 0x40000050: return 0x7B;  // SDLK_LEFT -> kVK_LeftArrow
+        case 0x4000004F: return 0x7C;  // SDLK_RIGHT -> kVK_RightArrow
+        case 0x40000052: return 0x7E;  // SDLK_UP -> kVK_UpArrow
+        case 0x40000051: return 0x7D;  // SDLK_DOWN -> kVK_DownArrow
+        case 0x4000004A: return 0x73;  // SDLK_HOME -> kVK_Home
+        case 0x4000004D: return 0x77;  // SDLK_END -> kVK_End
+        case 0x4000004B: return 0x74;  // SDLK_PAGEUP -> kVK_PageUp
+        case 0x4000004E: return 0x79;  // SDLK_PAGEDOWN -> kVK_PageDown
+        case 0x4000003A: return 0x60;  // SDLK_F5 -> kVK_F5
+        case 0x40000044: return 0x67;  // SDLK_F11 -> kVK_F11
+        // Letter keys (lowercase ASCII to Mac key codes)
+        case 'a': return 0x00;  // kVK_ANSI_A
+        case 'c': return 0x08;  // kVK_ANSI_C
+        case 'v': return 0x09;  // kVK_ANSI_V
+        case 'x': return 0x07;  // kVK_ANSI_X
+        case 'z': return 0x06;  // kVK_ANSI_Z
+        case 'y': return 0x10;  // kVK_ANSI_Y
+        default: return sdlKey;
+    }
+}
+#endif
+
 void Client::sendKeyEvent(int key, bool down, int modifiers) {
     if (!browser_) return;
     CefKeyEvent event;
     event.windows_key_code = sdlKeyToWindows(key);
+#ifdef __APPLE__
+    event.native_key_code = sdlKeyToMacNative(key);
+#else
     event.native_key_code = key;
+#endif
     event.modifiers = modifiers;
     event.type = down ? KEYEVENT_KEYDOWN : KEYEVENT_KEYUP;
     browser_->GetHost()->SendKeyEvent(event);
@@ -467,6 +515,17 @@ void OverlayClient::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
     rect.Set(0, 0, width_, height_);
 }
 
+bool OverlayClient::GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo& screen_info) {
+    // Force 1.0 scale factor to avoid Retina 2x rendering
+    screen_info.device_scale_factor = 1.0f;
+    screen_info.depth = 32;
+    screen_info.depth_per_component = 8;
+    screen_info.is_monochrome = false;
+    screen_info.rect = CefRect(0, 0, width_, height_);
+    screen_info.available_rect = screen_info.rect;
+    return true;
+}
+
 void OverlayClient::OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
                              const RectList& dirtyRects, const void* buffer,
                              int width, int height) {
@@ -539,7 +598,11 @@ void OverlayClient::sendKeyEvent(int key, bool down, int modifiers) {
     if (!browser_) return;
     CefKeyEvent event;
     event.windows_key_code = sdlKeyToWindows(key);
+#ifdef __APPLE__
+    event.native_key_code = sdlKeyToMacNative(key);
+#else
     event.native_key_code = key;
+#endif
     event.modifiers = modifiers;
     event.type = down ? KEYEVENT_KEYDOWN : KEYEVENT_KEYUP;
     browser_->GetHost()->SendKeyEvent(event);

@@ -39,6 +39,14 @@ public:
     uint32_t width() const { return width_; }
     uint32_t height() const { return height_; }
     VkDevice vkDevice() const { return device_; }
+    VkInstance vkInstance() const { return instance_; }
+    VkPhysicalDevice vkPhysicalDevice() const { return physical_device_; }
+    VkQueue vkQueue() const { return queue_; }
+    uint32_t vkQueueFamily() const { return queue_family_; }
+    PFN_vkGetInstanceProcAddr vkGetProcAddr() const { return vkGetInstanceProcAddr; }
+    const VkPhysicalDeviceFeatures2* features() const { return &features2_; }
+    const char* const* deviceExtensions() const { return device_extensions_; }
+    int deviceExtensionCount() const { return device_extension_count_; }
 
     void resize(uint32_t width, uint32_t height);
     void setVisible(bool visible);
@@ -47,7 +55,11 @@ public:
     bool isHdr() const { return is_hdr_; }
 
     // For mpv render context
+#ifdef __OBJC__
+    void* getMetalLayer() { return (__bridge void*)metal_layer_; }
+#else
     void* getMetalLayer() { return metal_layer_; }
+#endif
 
 private:
     SDL_Window* window_ = nullptr;
@@ -77,6 +89,14 @@ private:
     uint32_t width_ = 0;
     uint32_t height_ = 0;
     bool is_hdr_ = false;
+
+    // Features/extensions for mpv (must persist for the feature chain)
+    VkPhysicalDeviceFeatures2 features2_{};
+    VkPhysicalDeviceTimelineSemaphoreFeatures timeline_features_{};
+    VkPhysicalDeviceSamplerYcbcrConversionFeatures ycbcr_features_{};
+    VkPhysicalDeviceHostQueryResetFeatures host_query_reset_features_{};
+    const char* const* device_extensions_ = nullptr;
+    int device_extension_count_ = 0;
 };
 
 #endif // __APPLE__

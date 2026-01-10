@@ -45,15 +45,15 @@ if(APPLE)
     find_library(IOSURFACE_FRAMEWORK IOSurface REQUIRED)
 
     set(PLATFORM_SOURCES
-        src/cgl_context.mm
         src/macos_layer.mm
+        src/macos_app.mm
+        src/metal_compositor.mm
     )
     set(PLATFORM_LIBRARIES
         ${COCOA_FRAMEWORK}
         ${METAL_FRAMEWORK}
         ${QUARTZCORE_FRAMEWORK}
         ${IOSURFACE_FRAMEWORK}
-        OpenGL::GL
     )
 else()
     # Linux: OpenGL/EGL, Wayland
@@ -92,6 +92,7 @@ else()
     set(PLATFORM_SOURCES
         src/egl_context.cpp
         src/wayland_subsurface.cpp
+        src/opengl_compositor.cpp
         ${COLOR_MGMT_CODE_C}
         ${COLOR_MGMT_CLIENT_H}
     )
@@ -147,7 +148,6 @@ add_executable(jellyfin-desktop
     src/main.cpp
     src/cef_app.cpp
     src/cef_client.cpp
-    src/opengl_compositor.cpp
     src/vulkan_context.cpp
     src/mpv_player_vk.cpp
     src/settings.cpp
@@ -171,6 +171,16 @@ target_link_libraries(jellyfin-desktop PRIVATE
     ${PLATFORM_LIBRARIES}
 )
 
+# Enable ARC for Objective-C++ files on macOS
+if(APPLE)
+    set_source_files_properties(
+        src/macos_layer.mm
+        src/macos_app.mm
+        src/metal_compositor.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc"
+    )
+endif()
+
 # Linux RPATH configuration for libcef.so loading
 if(UNIX AND NOT APPLE)
     set_target_properties(jellyfin-desktop PROPERTIES
@@ -180,14 +190,38 @@ if(UNIX AND NOT APPLE)
 endif()
 
 # Copy CEF resources to build directory
-add_custom_command(TARGET jellyfin-desktop POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CEF_ROOT}/Resources"
-        "$<TARGET_FILE_DIR:jellyfin-desktop>"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CEF_ROOT}/Release"
-        "$<TARGET_FILE_DIR:jellyfin-desktop>"
-)
+if(APPLE)
+    # macOS: Copy framework to build/Frameworks/ and fix install_name paths
+    # CEF ships with @executable_path/../Frameworks/... but we want @executable_path/Frameworks/...
+    set(CEF_FRAMEWORK_NAME "Chromium Embedded Framework")
+    set(CEF_FRAMEWORK_DIR "${CMAKE_BINARY_DIR}/Frameworks/${CEF_FRAMEWORK_NAME}.framework")
+    set(CEF_FRAMEWORK_LIB "${CEF_FRAMEWORK_DIR}/${CEF_FRAMEWORK_NAME}")
+    set(OLD_INSTALL_NAME "@executable_path/../Frameworks/${CEF_FRAMEWORK_NAME}.framework/${CEF_FRAMEWORK_NAME}")
+    set(NEW_INSTALL_NAME "@executable_path/Frameworks/${CEF_FRAMEWORK_NAME}.framework/${CEF_FRAMEWORK_NAME}")
+
+    add_custom_command(TARGET jellyfin-desktop POST_BUILD
+        # Copy framework
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/Frameworks"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CEF_ROOT}/Release/${CEF_FRAMEWORK_NAME}.framework"
+            "${CEF_FRAMEWORK_DIR}"
+        # Fix framework's install_name
+        COMMAND install_name_tool -id "${NEW_INSTALL_NAME}" "${CEF_FRAMEWORK_LIB}"
+        # Fix executable's reference to framework
+        COMMAND install_name_tool -change "${OLD_INSTALL_NAME}" "${NEW_INSTALL_NAME}" "$<TARGET_FILE:jellyfin-desktop>"
+        COMMENT "Copying CEF framework and fixing install_name paths"
+    )
+else()
+    # Linux: Separate Resources and Release directories
+    add_custom_command(TARGET jellyfin-desktop POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CEF_ROOT}/Resources"
+            "$<TARGET_FILE_DIR:jellyfin-desktop>"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CEF_ROOT}/Release"
+            "$<TARGET_FILE_DIR:jellyfin-desktop>"
+    )
+endif()
 
 # Copy application resources (always sync when changed)
 file(GLOB_RECURSE RESOURCE_FILES "${CMAKE_SOURCE_DIR}/resources/*")
@@ -200,12 +234,18 @@ add_custom_target(copy_resources ALL
 )
 add_dependencies(jellyfin-desktop mpv_build copy_resources)
 
-# Copy libmpv to build directory
+# Copy libmpv to build directory and fix install_name
 if(APPLE)
     add_custom_command(TARGET jellyfin-desktop POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy
             "${MPV_BUILD_DIR}/libmpv.2.dylib"
             "$<TARGET_FILE_DIR:jellyfin-desktop>/libmpv.2.dylib"
+        # Fix libmpv install_name to load from executable directory
+        COMMAND install_name_tool -id "@executable_path/libmpv.2.dylib"
+            "$<TARGET_FILE_DIR:jellyfin-desktop>/libmpv.2.dylib"
+        # Fix executable to use local libmpv
+        COMMAND install_name_tool -change "@rpath/libmpv.2.dylib"
+            "@executable_path/libmpv.2.dylib" "$<TARGET_FILE:jellyfin-desktop>"
     )
 else()
     add_custom_command(TARGET jellyfin-desktop POST_BUILD

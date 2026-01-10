@@ -44,23 +44,45 @@ else()
 endif()
 
 if(NOT EXISTS "${CEF_WRAPPER_PATH}")
-    message(STATUS "Building libcef_dll_wrapper...")
-    execute_process(
-        COMMAND ${CMAKE_COMMAND} -B build -DCMAKE_BUILD_TYPE=Release
-        WORKING_DIRECTORY ${CEF_ROOT}
-        RESULT_VARIABLE CEF_CONFIG_RESULT
-    )
-    if(NOT CEF_CONFIG_RESULT EQUAL 0)
-        message(FATAL_ERROR "Failed to configure CEF")
-    endif()
-    # Limit parallelism - CEF wrapper builds OOM with unlimited -j even on 16GB RAM
-    execute_process(
-        COMMAND ${CMAKE_COMMAND} --build build --target libcef_dll_wrapper -j2
-        WORKING_DIRECTORY ${CEF_ROOT}
-        RESULT_VARIABLE CEF_BUILD_RESULT
-    )
-    if(NOT CEF_BUILD_RESULT EQUAL 0)
-        message(FATAL_ERROR "Failed to build libcef_dll_wrapper")
+    # Check if wrapper exists without Release/ subdirectory (CEF build output location)
+    set(CEF_WRAPPER_ACTUAL "${CEF_ROOT}/build/libcef_dll_wrapper/libcef_dll_wrapper.a")
+    if(EXISTS "${CEF_WRAPPER_ACTUAL}" AND APPLE)
+        # Create Release/ symlink for macOS (CEF builds to parent dir, we expect Release/)
+        message(STATUS "Creating symlink for libcef_dll_wrapper...")
+        file(MAKE_DIRECTORY "${CEF_ROOT}/build/libcef_dll_wrapper/Release")
+        execute_process(
+            COMMAND ${CMAKE_COMMAND} -E create_symlink
+                "${CEF_WRAPPER_ACTUAL}"
+                "${CEF_WRAPPER_PATH}"
+        )
+    else()
+        message(STATUS "Building libcef_dll_wrapper...")
+        execute_process(
+            COMMAND ${CMAKE_COMMAND} -B build -DCMAKE_BUILD_TYPE=Release
+            WORKING_DIRECTORY ${CEF_ROOT}
+            RESULT_VARIABLE CEF_CONFIG_RESULT
+        )
+        if(NOT CEF_CONFIG_RESULT EQUAL 0)
+            message(FATAL_ERROR "Failed to configure CEF")
+        endif()
+        # Limit parallelism - CEF wrapper builds OOM with unlimited -j even on 16GB RAM
+        execute_process(
+            COMMAND ${CMAKE_COMMAND} --build build --target libcef_dll_wrapper -j2
+            WORKING_DIRECTORY ${CEF_ROOT}
+            RESULT_VARIABLE CEF_BUILD_RESULT
+        )
+        if(NOT CEF_BUILD_RESULT EQUAL 0)
+            message(FATAL_ERROR "Failed to build libcef_dll_wrapper")
+        endif()
+        # Create Release/ symlink on macOS after build
+        if(APPLE AND EXISTS "${CEF_WRAPPER_ACTUAL}" AND NOT EXISTS "${CEF_WRAPPER_PATH}")
+            file(MAKE_DIRECTORY "${CEF_ROOT}/build/libcef_dll_wrapper/Release")
+            execute_process(
+                COMMAND ${CMAKE_COMMAND} -E create_symlink
+                    "${CEF_WRAPPER_ACTUAL}"
+                    "${CEF_WRAPPER_PATH}"
+            )
+        endif()
     endif()
 endif()
 

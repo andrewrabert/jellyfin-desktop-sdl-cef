@@ -4,21 +4,40 @@
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <Metal/Metal.h>
-#import <SDL3/SDL_syswm.h>
+#include <vector>
+#include <algorithm>
 
 // Vulkan surface extension for macOS
 #include <vulkan/vulkan_metal.h>
 
-bool MacOSVideoLayer::init(SDL_Window* window, VkInstance instance, VkPhysicalDevice physicalDevice,
-                           VkDevice device, uint32_t queueFamily,
-                           const char* const* deviceExtensions, uint32_t deviceExtensionCount,
-                           const char* const* instanceExtensions) {
+// Device extensions needed for mpv/libplacebo (MoltenVK compatible)
+static const char* s_deviceExtensions[] = {
+    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+    "VK_KHR_portability_subset",  // Required for MoltenVK
+    VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME,
+    VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME,
+    VK_KHR_BIND_MEMORY_2_EXTENSION_NAME,
+    VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,
+    VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
+    VK_KHR_MAINTENANCE1_EXTENSION_NAME,
+    VK_KHR_MAINTENANCE2_EXTENSION_NAME,
+    VK_KHR_MAINTENANCE3_EXTENSION_NAME,
+    VK_KHR_DESCRIPTOR_UPDATE_TEMPLATE_EXTENSION_NAME,
+    VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME,
+    VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME,
+    VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME,
+    VK_KHR_SPIRV_1_4_EXTENSION_NAME,
+    VK_EXT_HOST_QUERY_RESET_EXTENSION_NAME,
+};
+static const int s_deviceExtensionCount = sizeof(s_deviceExtensions) / sizeof(s_deviceExtensions[0]);
+
+bool MacOSVideoLayer::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
+                           VkDevice, uint32_t,
+                           const char* const*, uint32_t,
+                           const char* const*) {
+    // We ignore the passed-in Vulkan handles and create our own
+    // This matches how WaylandSubsurface works on Linux
     window_ = window;
-    instance_ = instance;
-    physical_device_ = physicalDevice;
-    device_ = device;
-    queue_family_ = queueFamily;
-    vkGetDeviceQueue(device, queueFamily, 0, &queue_);
 
     // Get NSWindow from SDL
     SDL_PropertiesID props = SDL_GetWindowProperties(window);
@@ -49,11 +68,115 @@ bool MacOSVideoLayer::init(SDL_Window* window, VkInstance instance, VkPhysicalDe
 
     [video_view_ setLayer:metal_layer_];
 
-    // Insert video view behind content view
+    // Add video view as first subview (at back)
+    // The MetalCompositor will add CEF layer on top
     [content_view addSubview:video_view_ positioned:NSWindowBelow relativeTo:nil];
 
-    is_hdr_ = YES;
+    is_hdr_ = true;
     NSLog(@"MacOS video layer initialized with HDR (EDR) support");
+
+    // Create our own Vulkan instance (like WaylandSubsurface does)
+    const char* instanceExts[] = {
+        VK_KHR_SURFACE_EXTENSION_NAME,
+        VK_EXT_METAL_SURFACE_EXTENSION_NAME,
+        VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
+        VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,
+    };
+
+    VkApplicationInfo appInfo{};
+    appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    appInfo.apiVersion = VK_API_VERSION_1_2;
+    appInfo.pApplicationName = "Jellyfin Desktop";
+
+    VkInstanceCreateInfo instanceInfo{};
+    instanceInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    instanceInfo.pApplicationInfo = &appInfo;
+    instanceInfo.enabledExtensionCount = 4;
+    instanceInfo.ppEnabledExtensionNames = instanceExts;
+    instanceInfo.flags = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+
+    if (vkCreateInstance(&instanceInfo, nullptr, &instance_) != VK_SUCCESS) {
+        NSLog(@"Failed to create Vulkan instance");
+        return false;
+    }
+
+    // Select physical device
+    uint32_t gpuCount = 0;
+    vkEnumeratePhysicalDevices(instance_, &gpuCount, nullptr);
+    if (gpuCount == 0) {
+        NSLog(@"No Vulkan devices found");
+        return false;
+    }
+    std::vector<VkPhysicalDevice> gpus(gpuCount);
+    vkEnumeratePhysicalDevices(instance_, &gpuCount, gpus.data());
+    physical_device_ = gpus[0];
+
+    // Find graphics queue family
+    uint32_t queueFamilyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &queueFamilyCount, nullptr);
+    std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &queueFamilyCount, queueFamilies.data());
+
+    for (uint32_t i = 0; i < queueFamilyCount; i++) {
+        if (queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+            queue_family_ = i;
+            break;
+        }
+    }
+
+    // Create device
+    float queuePriority = 1.0f;
+    VkDeviceQueueCreateInfo queueInfo{};
+    queueInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    queueInfo.queueFamilyIndex = queue_family_;
+    queueInfo.queueCount = 1;
+    queueInfo.pQueuePriorities = &queuePriority;
+
+    // Query supported features first (feature chain for libplacebo/mpv)
+    ycbcr_features_ = {};
+    ycbcr_features_.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES;
+
+    host_query_reset_features_ = {};
+    host_query_reset_features_.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_QUERY_RESET_FEATURES;
+    host_query_reset_features_.pNext = &ycbcr_features_;
+
+    timeline_features_ = {};
+    timeline_features_.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
+    timeline_features_.pNext = &host_query_reset_features_;
+
+    features2_ = {};
+    features2_.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    features2_.pNext = &timeline_features_;
+
+    // Query what features are actually supported
+    vkGetPhysicalDeviceFeatures2(physical_device_, &features2_);
+
+    NSLog(@"Vulkan features - shaderImageGatherExtended: %d, shaderStorageImageReadWithoutFormat: %d",
+          features2_.features.shaderImageGatherExtended,
+          features2_.features.shaderStorageImageReadWithoutFormat);
+    NSLog(@"Vulkan features - timelineSemaphore: %d, samplerYcbcrConversion: %d, hostQueryReset: %d",
+          timeline_features_.timelineSemaphore,
+          ycbcr_features_.samplerYcbcrConversion,
+          host_query_reset_features_.hostQueryReset);
+
+    VkDeviceCreateInfo deviceInfo{};
+    deviceInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    deviceInfo.pNext = &features2_;
+    deviceInfo.queueCreateInfoCount = 1;
+    deviceInfo.pQueueCreateInfos = &queueInfo;
+    deviceInfo.enabledExtensionCount = s_deviceExtensionCount;
+    deviceInfo.ppEnabledExtensionNames = s_deviceExtensions;
+
+    if (vkCreateDevice(physical_device_, &deviceInfo, nullptr, &device_) != VK_SUCCESS) {
+        NSLog(@"Failed to create Vulkan device");
+        return false;
+    }
+
+    vkGetDeviceQueue(device_, queue_family_, 0, &queue_);
+
+    // Store device extensions for mpv
+    device_extensions_ = s_deviceExtensions;
+    device_extension_count_ = s_deviceExtensionCount;
 
     // Create Vulkan surface from Metal layer
     VkMetalSurfaceCreateInfoEXT surfaceCreateInfo = {};
@@ -61,19 +184,20 @@ bool MacOSVideoLayer::init(SDL_Window* window, VkInstance instance, VkPhysicalDe
     surfaceCreateInfo.pLayer = metal_layer_;
 
     PFN_vkCreateMetalSurfaceEXT vkCreateMetalSurfaceEXT =
-        (PFN_vkCreateMetalSurfaceEXT)vkGetInstanceProcAddr(instance, "vkCreateMetalSurfaceEXT");
+        (PFN_vkCreateMetalSurfaceEXT)vkGetInstanceProcAddr(instance_, "vkCreateMetalSurfaceEXT");
 
     if (!vkCreateMetalSurfaceEXT) {
         NSLog(@"vkCreateMetalSurfaceEXT not available");
         return false;
     }
 
-    VkResult result = vkCreateMetalSurfaceEXT(instance, &surfaceCreateInfo, nullptr, &surface_);
+    VkResult result = vkCreateMetalSurfaceEXT(instance_, &surfaceCreateInfo, nullptr, &surface_);
     if (result != VK_SUCCESS) {
         NSLog(@"Failed to create Vulkan Metal surface: %d", result);
         return false;
     }
 
+    NSLog(@"Vulkan context initialized (manual instance/device via MoltenVK)");
     return true;
 }
 
@@ -98,11 +222,20 @@ void MacOSVideoLayer::cleanup() {
         surface_ = VK_NULL_HANDLE;
     }
 
+    if (device_ != VK_NULL_HANDLE) {
+        vkDestroyDevice(device_, nullptr);
+        device_ = VK_NULL_HANDLE;
+    }
+
+    if (instance_ != VK_NULL_HANDLE) {
+        vkDestroyInstance(instance_, nullptr);
+        instance_ = VK_NULL_HANDLE;
+    }
+
     if (video_view_) {
         [video_view_ removeFromSuperview];
         video_view_ = nil;
     }
-
     metal_layer_ = nil;
 }
 
@@ -267,7 +400,6 @@ void MacOSVideoLayer::resize(uint32_t width, uint32_t height) {
     destroySwapchain();
     createSwapchain(width, height);
 
-    // Update view frame
     if (video_view_) {
         NSRect frame = NSMakeRect(0, 0, width, height);
         [video_view_ setFrame:frame];

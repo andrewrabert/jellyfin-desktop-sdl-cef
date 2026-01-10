@@ -3,7 +3,12 @@
 #include <cstring>
 
 #ifdef __APPLE__
+#include <IOSurface/IOSurface.h>
 #include <OpenGL/CGLIOSurface.h>
+// macOS gl3.h defines GL_BGRA, not GL_BGRA_EXT
+#ifndef GL_BGRA_EXT
+#define GL_BGRA_EXT GL_BGRA
+#endif
 #else
 #include <unistd.h>
 #endif

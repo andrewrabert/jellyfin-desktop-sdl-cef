@@ -30,7 +30,7 @@ void MpvPlayerVk::onMpvRedraw(void* ctx) {
     }
 }
 
-bool MpvPlayerVk::init(VulkanContext* vk, WaylandSubsurface* subsurface) {
+bool MpvPlayerVk::init(VulkanContext* vk, VideoSurface* subsurface) {
     vk_ = vk;
     subsurface_ = subsurface;
 
@@ -49,17 +49,27 @@ bool MpvPlayerVk::init(VulkanContext* vk, WaylandSubsurface* subsurface) {
     mpv_set_option_string(mpv_, "video-sync", "audio");  // Simple audio sync, no frame interpolation
     mpv_set_option_string(mpv_, "interpolation", "no");  // Disable motion interpolation
 
-    // HDR output configuration - tell mpv to output PQ/BT.2020
-    // We handle Wayland color signaling ourselves, so use explicit targets
+    // HDR output configuration
     bool use_hdr = subsurface_ && subsurface_->isHdr();
     if (use_hdr) {
+#ifdef __APPLE__
+        // macOS EDR uses extended linear sRGB - output linear light values
+        mpv_set_option_string(mpv_, "target-prim", "bt.709");
+        mpv_set_option_string(mpv_, "target-trc", "linear");
+        mpv_set_option_string(mpv_, "tone-mapping", "clip");
+        double peak = 1000.0;  // EDR headroom
+        mpv_set_option(mpv_, "target-peak", MPV_FORMAT_DOUBLE, &peak);
+        std::cerr << "mpv HDR output enabled (bt.709/linear for macOS EDR)" << std::endl;
+#else
+        // Linux Wayland HDR uses PQ/BT.2020
         mpv_set_option_string(mpv_, "target-prim", "bt.2020");
         mpv_set_option_string(mpv_, "target-trc", "pq");
         mpv_set_option_string(mpv_, "target-colorspace-hint", "yes");
         mpv_set_option_string(mpv_, "tone-mapping", "clip");  // No tone mapping for passthrough
         double peak = 1000.0;
         mpv_set_option(mpv_, "target-peak", MPV_FORMAT_DOUBLE, &peak);
-        std::cerr << "mpv HDR output enabled (bt.2020/pq/1000 nits, no tonemapping)" << std::endl;
+        std::cerr << "mpv HDR output enabled (bt.2020/pq/1000 nits)" << std::endl;
+#endif
     }
 
     if (mpv_initialize(mpv_) < 0) {
@@ -96,17 +106,30 @@ bool MpvPlayerVk::init(VulkanContext* vk, WaylandSubsurface* subsurface) {
     }
 
     int advanced_control = 1;
-    mpv_render_param params[] = {
-        {MPV_RENDER_PARAM_API_TYPE, const_cast<char*>(MPV_RENDER_API_TYPE_VULKAN)},
-        {MPV_RENDER_PARAM_BACKEND, const_cast<char*>("gpu-next")},
-        {MPV_RENDER_PARAM_VULKAN_INIT_PARAMS, &vk_params},
-        {MPV_RENDER_PARAM_ADVANCED_CONTROL, &advanced_control},
-        {MPV_RENDER_PARAM_INVALID, nullptr}
-    };
 
-    int result = mpv_render_context_create(&render_ctx_, mpv_, params);
+    // Try gpu-next first (libplacebo), fall back to gpu (legacy) if needed
+    const char* backends[] = {"gpu-next", "gpu"};
+    int result = -1;
+
+    for (const char* backend : backends) {
+        mpv_render_param params[] = {
+            {MPV_RENDER_PARAM_API_TYPE, const_cast<char*>(MPV_RENDER_API_TYPE_VULKAN)},
+            {MPV_RENDER_PARAM_BACKEND, const_cast<char*>(backend)},
+            {MPV_RENDER_PARAM_VULKAN_INIT_PARAMS, &vk_params},
+            {MPV_RENDER_PARAM_ADVANCED_CONTROL, &advanced_control},
+            {MPV_RENDER_PARAM_INVALID, nullptr}
+        };
+
+        result = mpv_render_context_create(&render_ctx_, mpv_, params);
+        if (result >= 0) {
+            std::cerr << "mpv using backend: " << backend << std::endl;
+            break;
+        }
+        std::cerr << "mpv backend '" << backend << "' failed: " << mpv_error_string(result) << std::endl;
+    }
+
     if (result < 0) {
-        std::cerr << "mpv_render_context_create failed: " << mpv_error_string(result) << std::endl;
+        std::cerr << "mpv_render_context_create failed (all backends)" << std::endl;
         return false;
     }
 

@@ -44,11 +44,18 @@ void App::OnBeforeCommandLineProcessing(const CefString& process_type,
         "PushMessaging,BackgroundSync,SafeBrowsing,Translate,OptimizationHints,"
         "MediaRouter,DialMediaRouteProvider,AcceptCHFrame,AutofillServerCommunication,"
         "CertificateTransparencyComponentUpdater,SyncNotificationServiceWhenSignedIn,"
-        "SpellCheck,SpellCheckService");
+        "SpellCheck,SpellCheckService,PasswordManager");
     // Empty API keys prevent any Google API calls
     command_line->AppendSwitchWithValue("google-api-key", "");
     command_line->AppendSwitchWithValue("google-default-client-id", "");
     command_line->AppendSwitchWithValue("google-default-client-secret", "");
+
+#ifdef __APPLE__
+    // macOS: Use mock keychain to avoid system keychain prompts
+    command_line->AppendSwitch("use-mock-keychain");
+    // Disable software rasterizer to avoid GPU process issues
+    command_line->AppendSwitch("disable-software-rasterizer");
+#endif
 
     // Disable GPU rendering unless --gpu-overlay is specified
     // Software rendering is more stable and performs well for UI overlays
@@ -60,6 +67,14 @@ void App::OnBeforeCommandLineProcessing(const CefString& process_type,
 
 void App::OnContextInitialized() {
     std::cerr << "CEF context initialized" << std::endl;
+}
+
+void App::OnScheduleMessagePumpWork(int64_t delay_ms) {
+    // Called by CEF when it needs CefDoMessageLoopWork() to be called
+    // delay_ms == 0: immediate work needed
+    // delay_ms > 0: work needed after delay
+    cef_work_delay_ms_.store(delay_ms);
+    cef_work_pending_.store(true);
 }
 
 void App::OnContextCreated(CefRefPtr<CefBrowser> browser,

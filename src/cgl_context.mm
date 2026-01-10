@@ -4,7 +4,6 @@
 #import <Cocoa/Cocoa.h>
 #import <OpenGL/OpenGL.h>
 #import <OpenGL/gl3.h>
-#import <SDL3/SDL_syswm.h>
 
 bool CGLContext::init(SDL_Window* window) {
     window_ = window;

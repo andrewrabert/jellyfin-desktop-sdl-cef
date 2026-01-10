@@ -4,7 +4,7 @@
 #include "include/cef_render_process_handler.h"
 #include "include/cef_v8.h"
 #include <SDL3/SDL.h>
-#include <functional>
+#include <atomic>
 #include <string>
 
 // Custom SDL event for video playback
@@ -24,6 +24,10 @@ public:
     static void SetGpuOverlayEnabled(bool enabled) { gpu_overlay_enabled_ = enabled; }
     static bool IsGpuOverlayEnabled() { return gpu_overlay_enabled_; }
 
+    // Check if CEF needs work done (for external_message_pump mode)
+    static bool NeedsWork() { return cef_work_pending_.exchange(false); }
+    static int64_t GetWorkDelay() { return cef_work_delay_ms_; }
+
     // CefApp
     CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override { return this; }
     CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override { return this; }
@@ -32,6 +36,7 @@ public:
 
     // CefBrowserProcessHandler
     void OnContextInitialized() override;
+    void OnScheduleMessagePumpWork(int64_t delay_ms) override;
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                   CefRefPtr<CefFrame> frame,
                                   CefProcessId source_process,
@@ -44,6 +49,8 @@ public:
 
 private:
     static inline bool gpu_overlay_enabled_ = false;
+    static inline std::atomic<bool> cef_work_pending_{false};
+    static inline std::atomic<int64_t> cef_work_delay_ms_{0};
 
     IMPLEMENT_REFCOUNTING(App);
     DISALLOW_COPY_AND_ASSIGN(App);

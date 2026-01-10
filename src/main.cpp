@@ -13,17 +13,25 @@
 #include "include/cef_app.h"
 #include "include/cef_browser.h"
 #include "include/cef_command_line.h"
+#ifdef __APPLE__
+#include "include/wrapper/cef_library_loader.h"
+#include "include/cef_application_mac.h"
+
+// Initialize CEF-compatible NSApplication before SDL
+void initMacApplication();
+// Activate window for keyboard focus after SDL window creation
+void activateMacWindow();
+#endif
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
-#include "cgl_context.h"
 #include "macos_layer.h"
+#include "metal_compositor.h"
 #else
 #include "egl_context.h"
 #include "wayland_subsurface.h"
-#endif
-
 #include "opengl_compositor.h"
+#endif
 #include "mpv_player_vk.h"
 #include "cef_app.h"
 #include "cef_client.h"
@@ -43,11 +51,15 @@ constexpr int MULTI_CLICK_DISTANCE = 4;
 constexpr Uint64 MULTI_CLICK_TIME = 500;
 
 // Convert SDL modifier state to CEF modifier flags
+// CEF flags: SHIFT=1<<1, CTRL=1<<2, ALT=1<<3, CMD=1<<7
 int sdlModsToCef(SDL_Keymod sdlMods) {
     int cef = 0;
-    if (sdlMods & SDL_KMOD_SHIFT) cef |= (1 << 1);
-    if (sdlMods & SDL_KMOD_CTRL)  cef |= (1 << 2);
-    if (sdlMods & SDL_KMOD_ALT)   cef |= (1 << 3);
+    if (sdlMods & SDL_KMOD_SHIFT) cef |= (1 << 1);  // EVENTFLAG_SHIFT_DOWN
+    if (sdlMods & SDL_KMOD_CTRL)  cef |= (1 << 2);  // EVENTFLAG_CONTROL_DOWN
+    if (sdlMods & SDL_KMOD_ALT)   cef |= (1 << 3);  // EVENTFLAG_ALT_DOWN
+#ifdef __APPLE__
+    if (sdlMods & SDL_KMOD_GUI)   cef |= (1 << 7);  // EVENTFLAG_COMMAND_DOWN (Cmd key)
+#endif
     return cef;
 }
 
@@ -88,6 +100,34 @@ static auto _main_start = std::chrono::steady_clock::now();
 inline long _ms() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - _main_start).count(); }
 
 int main(int argc, char* argv[]) {
+#ifdef __APPLE__
+    // macOS: Get executable path early for CEF framework loading
+    char exe_buf[PATH_MAX];
+    uint32_t exe_size = sizeof(exe_buf);
+    std::filesystem::path exe_path;
+    if (_NSGetExecutablePath(exe_buf, &exe_size) == 0) {
+        exe_path = std::filesystem::canonical(exe_buf).parent_path();
+    } else {
+        exe_path = std::filesystem::current_path();
+    }
+
+    // macOS: Load CEF framework dynamically (required - linking alone isn't enough)
+    // Framework is at Frameworks/ relative to executable (install_name fixed at build time)
+    std::string framework_lib = (exe_path / "Frameworks" /
+                                 "Chromium Embedded Framework.framework" /
+                                 "Chromium Embedded Framework").string();
+    std::cerr << "Loading CEF from: " << framework_lib << std::endl;
+    if (!cef_load_library(framework_lib.c_str())) {
+        std::cerr << "Failed to load CEF framework from: " << framework_lib << std::endl;
+        return 1;
+    }
+    std::cerr << "CEF framework loaded" << std::endl;
+
+    // CRITICAL: Initialize CEF-compatible NSApplication BEFORE CefExecuteProcess
+    // This must happen before any CEF code that might create an NSApplication
+    initMacApplication();
+#endif
+
     // Parse CLI args
     std::string test_video;
     bool use_gpu_overlay = false;  // DMA-BUF shared textures (experimental)
@@ -103,7 +143,9 @@ int main(int argc, char* argv[]) {
     CefMainArgs main_args(argc, argv);
     CefRefPtr<App> app(new App());
 
+    std::cerr << "Calling CefExecuteProcess..." << std::endl;
     int exit_code = CefExecuteProcess(main_args, app, nullptr);
+    std::cerr << "CefExecuteProcess returned: " << exit_code << std::endl;
     if (exit_code >= 0) {
         return exit_code;
     }
@@ -133,16 +175,12 @@ int main(int argc, char* argv[]) {
     SDL_StartTextInput(window);
 
 #ifdef __APPLE__
-    // macOS: Initialize CGL context for OpenGL rendering
-    CGLContext glctx;
-    if (!glctx.init(window)) {
-        std::cerr << "CGL init failed" << std::endl;
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
-    }
+    // Ensure window has keyboard focus after creation
+    activateMacWindow();
+#endif
 
-    // Initialize macOS layer for HDR video (uses MoltenVK)
+#ifdef __APPLE__
+    // macOS: Initialize video layer first (will be at back)
     MacOSVideoLayer videoLayer;
     if (!videoLayer.init(window, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, 0,
                          nullptr, 0, nullptr)) {
@@ -167,18 +205,18 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Initialize OpenGL compositor for CEF overlay
-    OpenGLCompositor compositor;
-    if (!compositor.init(&glctx, width, height, use_gpu_overlay)) {
-        std::cerr << "OpenGLCompositor init failed" << std::endl;
+    // Initialize Metal compositor for CEF overlay (renders on top of video)
+    MetalCompositor compositor;
+    if (!compositor.init(window, width, height)) {
+        std::cerr << "MetalCompositor init failed" << std::endl;
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
     }
 
     // Second compositor for overlay browser
-    OpenGLCompositor overlay_compositor;
-    if (!overlay_compositor.init(&glctx, width, height, false)) {  // Always software for overlay
+    MetalCompositor overlay_compositor;
+    if (!overlay_compositor.init(window, width, height)) {
         std::cerr << "Overlay compositor init failed" << std::endl;
         SDL_DestroyWindow(window);
         SDL_Quit();
@@ -243,25 +281,27 @@ int main(int argc, char* argv[]) {
 
     // CEF settings
     CefSettings settings;
-    settings.windowless_rendering_enabled = true;
     settings.no_sandbox = true;
+    settings.windowless_rendering_enabled = true;
+#ifdef __APPLE__
+    // macOS: use external_message_pump for responsive input handling
+    // (multi_threaded_message_loop only supported on Windows/Linux)
+    settings.external_message_pump = true;
+#else
     settings.multi_threaded_message_loop = true;
+#endif
 
 #ifdef __APPLE__
-    // macOS: use _NSGetExecutablePath
-    char exe_buf[PATH_MAX];
-    uint32_t exe_size = sizeof(exe_buf);
-    std::filesystem::path exe_path;
-    if (_NSGetExecutablePath(exe_buf, &exe_size) == 0) {
-        exe_path = std::filesystem::canonical(exe_buf).parent_path();
-    } else {
-        exe_path = std::filesystem::current_path();
-    }
+    // macOS: Must set paths explicitly since we're not a proper .app bundle
+    std::filesystem::path framework_path = exe_path / "Frameworks" / "Chromium Embedded Framework.framework";
+    CefString(&settings.framework_dir_path).FromString(framework_path.string());
+    // Use main executable as subprocess - it handles CefExecuteProcess early
+    CefString(&settings.browser_subprocess_path).FromString((exe_path / "jellyfin-desktop").string());
 #else
     std::filesystem::path exe_path = std::filesystem::canonical("/proc/self/exe").parent_path();
-#endif
     CefString(&settings.resources_dir_path).FromString(exe_path.string());
     CefString(&settings.locales_dir_path).FromString((exe_path / "locales").string());
+#endif
 
     // Cache path
     std::filesystem::path cache_path;
@@ -330,10 +370,21 @@ int main(int argc, char* argv[]) {
     CefRefPtr<OverlayClient> overlay_client(new OverlayClient(width, height,
         [&](const void* buffer, int w, int h) {
             std::lock_guard<std::mutex> lock(buffer_mutex);
+            static bool first_overlay_paint = true;
+            if (first_overlay_paint) {
+                std::cerr << "[CEF Overlay] first paint callback: " << w << "x" << h << std::endl;
+                first_overlay_paint = false;
+            }
             void* staging = overlay_compositor.getStagingBuffer(w, h);
             if (staging) {
                 memcpy(staging, buffer, w * h * 4);
                 overlay_compositor.markStagingDirty();
+            } else {
+                static bool warned = false;
+                if (!warned) {
+                    std::cerr << "[CEF Overlay] getStagingBuffer returned null for " << w << "x" << h << std::endl;
+                    warned = false;
+                }
             }
         },
         [&](const std::string& url) {
@@ -347,10 +398,21 @@ int main(int argc, char* argv[]) {
         [&](const void* buffer, int w, int h) {
             // Copy directly to compositor staging buffer (single memcpy)
             std::lock_guard<std::mutex> lock(buffer_mutex);
+            static bool first_paint = true;
+            if (first_paint) {
+                std::cerr << "[CEF] first paint callback: " << w << "x" << h << std::endl;
+                first_paint = false;
+            }
             void* staging = compositor.getStagingBuffer(w, h);
             if (staging) {
                 memcpy(staging, buffer, w * h * 4);
                 compositor.markStagingDirty();
+            } else {
+                static bool warned = false;
+                if (!warned) {
+                    std::cerr << "[CEF] getStagingBuffer returned null for " << w << "x" << h << std::endl;
+                    warned = false;  // Warn every time for debugging
+                }
             }
             paint_width = w;
             paint_height = h;
@@ -360,10 +422,7 @@ int main(int argc, char* argv[]) {
             pending_cmds.push_back({cmd, arg, intArg});
         },
 #ifdef __APPLE__
-        [&](IOSurfaceRef surface, int w, int h) {
-            // GPU accelerated paint - queue IOSurface for import in render loop
-            compositor.queueIOSurface(surface, w, h);
-        },
+        nullptr,  // No GPU accelerated paint on macOS (using Metal compositor)
 #else
         [&](const AcceleratedPaintInfo& info) {
             // GPU accelerated paint - queue DMA-BUF for import in render loop
@@ -416,10 +475,12 @@ int main(int argc, char* argv[]) {
     std::string main_url = Settings::instance().serverUrl();
     if (main_url.empty()) {
         main_url = "about:blank";
+        std::cerr << "[Overlay] State: SHOWING (no saved URL)" << std::endl;
     } else {
         // Start fade timer since we're auto-loading saved server
         overlay_state = OverlayState::WAITING;
         overlay_fade_start = Clock::now();
+        std::cerr << "[Overlay] State: SHOWING -> WAITING (saved URL: " << main_url << ")" << std::endl;
     }
     std::cerr << "Main browser loading: " << main_url << std::endl;
     CefBrowserHost::CreateBrowser(window_info, client, main_url, browser_settings, nullptr, nullptr);
@@ -434,15 +495,27 @@ int main(int argc, char* argv[]) {
     int current_width = width;
     int current_height = height;
     bool video_ready = false;  // Latches true once first frame renders
+#ifdef __APPLE__
+    auto last_cef_work = Clock::now();
+    // Calculate pump interval based on display refresh rate (e.g., 8ms for 120Hz, 16ms for 60Hz)
+    int cef_pump_interval_ms = (mode && mode->refresh_rate > 0) ? static_cast<int>(1000.0f / mode->refresh_rate) : 16;
+    std::cerr << "CEF pump interval: " << cef_pump_interval_ms << "ms" << std::endl;
+#endif
 
     // Auto-load test video if provided via --video
     if (!test_video.empty()) {
         std::cerr << "[TEST] Loading video: " << test_video << std::endl;
         if (mpv.loadFile(test_video)) {
             has_video = true;
+#ifdef __APPLE__
+            if (has_subsurface && videoLayer.isHdr()) {
+                // macOS EDR is automatic
+            }
+#else
             if (has_subsurface && subsurface.isHdr()) {
                 subsurface.setColorspace();
             }
+#endif
             client->emitPlaying();
         } else {
             std::cerr << "[TEST] Failed to load: " << test_video << std::endl;
@@ -459,8 +532,10 @@ int main(int argc, char* argv[]) {
         if (!focus_set) {
             if (overlay_state == OverlayState::SHOWING || overlay_state == OverlayState::WAITING) {
                 overlay_client->sendFocus(true);
+                client->sendFocus(false);
             } else {
                 client->sendFocus(true);
+                overlay_client->sendFocus(false);
             }
             focus_set = true;
         }
@@ -468,7 +543,11 @@ int main(int argc, char* argv[]) {
         // Event-driven: wait for events when idle, poll when active
         SDL_Event event;
         bool have_event;
+#ifdef __APPLE__
+        if (needs_render || has_video || compositor.hasPendingContent()) {
+#else
         if (needs_render || has_video || compositor.hasPendingContent() || compositor.hasPendingDmaBuf()) {
+#endif
             have_event = SDL_PollEvent(&event);
         } else {
             // Short wait - just yield CPU, don't block long (1ms for ~1000Hz max)
@@ -478,6 +557,13 @@ int main(int argc, char* argv[]) {
         while (have_event) {
             if (event.type == SDL_EVENT_QUIT) running = false;
             if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE && !menu.isOpen()) running = false;
+#ifdef __APPLE__
+            // Cmd+Q to quit on macOS (no menu bar to provide this)
+            if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_Q &&
+                (SDL_GetModState() & SDL_KMOD_GUI)) {
+                running = false;
+            }
+#endif
 
             if (event.type == SDL_EVENT_MOUSE_MOTION ||
                 event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
@@ -579,14 +665,12 @@ int main(int argc, char* argv[]) {
                 current_height = event.window.data2;
 
 #ifdef __APPLE__
-                // Resize CGL context
-                glctx.resize(current_width, current_height);
+                // Resize Metal compositor and video layer
                 compositor.resize(current_width, current_height);
                 overlay_compositor.resize(current_width, current_height);
                 client->resize(current_width, current_height);
                 overlay_client->resize(current_width, current_height);
 
-                // Resize video layer
                 if (has_subsurface) {
                     videoLayer.resize(current_width, current_height);
                 }
@@ -612,14 +696,20 @@ int main(int argc, char* argv[]) {
             } else if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) {
                 bool down = (event.type == SDL_EVENT_KEY_DOWN);
                 SDL_Keycode key = event.key.key;
+                std::cerr << "[SDL] KEY " << (down ? "DOWN" : "UP") << ": key=0x" << std::hex << key << std::dec << " mods=" << mods << std::endl;
                 bool is_control_key = (key == SDLK_BACKSPACE || key == SDLK_DELETE ||
                     key == SDLK_RETURN || key == SDLK_ESCAPE || key == SDLK_SPACE ||
                     key == SDLK_TAB || key == SDLK_LEFT || key == SDLK_RIGHT ||
                     key == SDLK_UP || key == SDLK_DOWN || key == SDLK_HOME ||
                     key == SDLK_END || key == SDLK_PAGEUP || key == SDLK_PAGEDOWN ||
                     key == SDLK_F5 || key == SDLK_F11);
-                bool has_ctrl = (mods & (1 << 2)) != 0;
-                if (is_control_key || has_ctrl) {
+                bool has_ctrl = (mods & (1 << 2)) != 0;  // CTRL
+#ifdef __APPLE__
+                bool has_cmd = (mods & (1 << 7)) != 0;   // CMD (macOS)
+#else
+                bool has_cmd = false;
+#endif
+                if (is_control_key || has_ctrl || has_cmd) {
                     if (overlay_state == OverlayState::SHOWING || overlay_state == OverlayState::WAITING) {
                         overlay_client->sendKeyEvent(key, down, mods);
                     } else {
@@ -627,6 +717,7 @@ int main(int argc, char* argv[]) {
                     }
                 }
             } else if (event.type == SDL_EVENT_TEXT_INPUT) {
+                std::cerr << "[SDL] TEXT_INPUT: \"" << event.text.text << "\"" << std::endl;
                 for (const char* c = event.text.text; *c; ++c) {
                     if (overlay_state == OverlayState::SHOWING || overlay_state == OverlayState::WAITING) {
                         overlay_client->sendChar(static_cast<unsigned char>(*c), mods);
@@ -638,10 +729,30 @@ int main(int argc, char* argv[]) {
             have_event = SDL_PollEvent(&event);
         }
 
+#ifdef __APPLE__
+        // macOS: external_message_pump - call CefDoMessageLoopWork when CEF requests it
+        if (App::NeedsWork()) {
+            int64_t delay_ms = App::GetWorkDelay();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_cef_work).count();
+            if (delay_ms == 0 || elapsed >= delay_ms) {
+                CefDoMessageLoopWork();
+                last_cef_work = Clock::now();
+            }
+        }
+        // Also pump periodically to ensure responsiveness (matches display refresh rate)
+        {
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - last_cef_work).count();
+            if (elapsed >= cef_pump_interval_ms) {
+                CefDoMessageLoopWork();
+                last_cef_work = Clock::now();
+            }
+        }
+#endif
+
         // Determine if we need to render this frame
         // With vsync, always render to maintain consistent frame pacing
 #ifdef __APPLE__
-        needs_render = activity_this_frame || has_video || compositor.hasPendingContent() || compositor.hasPendingIOSurface() || overlay_state == OverlayState::FADING;
+        needs_render = activity_this_frame || has_video || compositor.hasPendingContent() || overlay_state == OverlayState::FADING;
 #else
         needs_render = activity_this_frame || has_video || compositor.hasPendingContent() || compositor.hasPendingDmaBuf() || overlay_state == OverlayState::FADING;
 #endif
@@ -727,6 +838,7 @@ int main(int argc, char* argv[]) {
             if (elapsed >= OVERLAY_FADE_DELAY_SEC) {
                 overlay_state = OverlayState::FADING;
                 overlay_fade_start = now;
+                std::cerr << "[Overlay] State: WAITING -> FADING" << std::endl;
             }
         } else if (overlay_state == OverlayState::FADING) {
             auto elapsed = std::chrono::duration<float>(now - overlay_fade_start).count();
@@ -734,6 +846,12 @@ int main(int argc, char* argv[]) {
             if (progress >= 1.0f) {
                 overlay_browser_alpha = 0.0f;
                 overlay_state = OverlayState::HIDDEN;
+                // Hide overlay view so old content doesn't show through
+                overlay_compositor.setVisible(false);
+                // Transfer focus from overlay to main browser
+                overlay_client->sendFocus(false);
+                client->sendFocus(true);
+                std::cerr << "[Overlay] State: FADING -> HIDDEN" << std::endl;
             } else {
                 overlay_browser_alpha = 1.0f - progress;
             }
@@ -781,8 +899,19 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Import queued IOSurface if any (GPU path)
-        compositor.importQueuedIOSurface();
+        // Composite main browser (Metal handles its own presentation)
+        // Always call composite() - it handles "no content yet" internally and uploads staging data
+        if (test_video.empty() && (compositor.hasValidOverlay() || compositor.hasPendingContent())) {
+            float alpha = video_ready ? overlay_alpha : 1.0f;
+            compositor.composite(current_width, current_height, alpha);
+        }
+
+        // Composite overlay browser (with fade alpha)
+        if (overlay_state != OverlayState::HIDDEN && overlay_browser_alpha > 0.01f) {
+            if (overlay_compositor.hasValidOverlay() || overlay_compositor.hasPendingContent()) {
+                overlay_compositor.composite(current_width, current_height, overlay_browser_alpha);
+            }
+        }
 #else
         if (has_video && has_subsurface && mpv.hasFrame()) {
             VkImage sub_image;
@@ -799,7 +928,6 @@ int main(int argc, char* argv[]) {
 
         // Import queued DMA-BUF if any (GPU path)
         compositor.importQueuedDmaBuf();
-#endif
 
         // Flush pending overlay data to GPU texture (software path)
         compositor.flushOverlay();
@@ -824,9 +952,6 @@ int main(int argc, char* argv[]) {
         }
 
         // Swap buffers
-#ifdef __APPLE__
-        glctx.swapBuffers();
-#else
         egl.swapBuffers();
 #endif
     }
@@ -839,7 +964,6 @@ int main(int argc, char* argv[]) {
     if (has_subsurface) {
         videoLayer.cleanup();
     }
-    glctx.cleanup();
 #else
     if (has_subsurface) {
         subsurface.cleanup();

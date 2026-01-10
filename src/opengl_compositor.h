@@ -61,6 +61,9 @@ public:
     // Resize resources
     void resize(uint32_t width, uint32_t height);
 
+    // Set visibility (no-op on Linux, alpha controls rendering)
+    void setVisible(bool visible) { (void)visible; }
+
     // Check if we have valid content to composite
     bool hasValidOverlay() const { return has_content_; }
 
