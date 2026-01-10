@@ -27,6 +27,7 @@ public:
     virtual void setVolume(double volume) = 0;
     virtual void setCanGoNext(bool can) = 0;
     virtual void setCanGoPrevious(bool can) = 0;
+    virtual void setRate(double rate) = 0;
     virtual void emitSeeked(int64_t /*position_us*/) {}  // Emit Seeked signal (MPRIS only)
     virtual void update() = 0;  // Called from event loop to process events
     virtual int getFd() = 0;    // File descriptor for poll, -1 if none
@@ -44,6 +45,7 @@ public:
     void setVolume(double volume);
     void setCanGoNext(bool can);
     void setCanGoPrevious(bool can);
+    void setRate(double rate);
     void emitSeeked(int64_t position_us);  // Emit Seeked signal (for MPRIS)
 
     // Called from event loop
@@ -60,6 +62,7 @@ public:
     std::function<void()> onPrevious;
     std::function<void()> onRaise;
     std::function<void(bool)> onSetFullscreen;
+    std::function<void(double)> onSetRate;
 
     // Backend access (for platform-specific callbacks)
     MediaSessionBackend* backend() { return backend_.get(); }

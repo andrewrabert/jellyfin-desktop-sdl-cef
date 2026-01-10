@@ -42,6 +42,10 @@ void MediaSession::setCanGoPrevious(bool can) {
     if (backend_) backend_->setCanGoPrevious(can);
 }
 
+void MediaSession::setRate(double rate) {
+    if (backend_) backend_->setRate(rate);
+}
+
 void MediaSession::emitSeeked(int64_t position_us) {
     if (backend_) backend_->emitSeeked(position_us);
 }

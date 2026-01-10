@@ -87,6 +87,10 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
         bool muted = args->GetBool(0);
         on_player_msg_("mute", "", muted ? 1 : 0, "");
         return true;
+    } else if (name == "playerSetSpeed") {
+        int rateX1000 = args->GetInt(0);
+        on_player_msg_("speed", "", rateX1000, "");
+        return true;
     } else if (name == "saveServerUrl") {
         std::string url = args->GetString(0).ToString();
         std::cerr << "[IPC] Saving server URL: " << url << std::endl;
@@ -123,6 +127,12 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
         // Encode both bools in intArg: bit 0 = canNext, bit 1 = canPrev
         int flags = (canNext ? 1 : 0) | (canPrev ? 2 : 0);
         on_player_msg_("mpris_queue", "", flags, "");
+        return true;
+    } else if (name == "notifyRateChange") {
+        double rate = args->GetDouble(0);
+        // Use the rate * 1000000 to pass as int (microseconds precision equivalent)
+        // We'll decode this in main.cpp
+        on_player_msg_("mpris_notify_rate", "", static_cast<int>(rate * 1000000), "");
         return true;
     }
 
@@ -452,6 +462,10 @@ void Client::emitFinished() {
 
 void Client::emitError(const std::string& msg) {
     executeJS("if(window._nativeEmit) window._nativeEmit('error', '" + msg + "');");
+}
+
+void Client::emitRateChanged(double rate) {
+    executeJS("if(window._nativeSetRate) window._nativeSetRate(" + std::to_string(rate) + ");");
 }
 
 void Client::updatePosition(double positionMs) {

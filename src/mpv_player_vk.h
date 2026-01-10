@@ -47,6 +47,7 @@ public:
     void seek(double seconds);
     void setVolume(int volume);
     void setMuted(bool muted);
+    void setSpeed(double speed);
 
     // State queries
     double getPosition() const;

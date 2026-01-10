@@ -110,19 +110,38 @@ static int prop_get_volume(sd_bus* bus, const char* path, const char* interface,
 static int prop_get_rate(sd_bus* bus, const char* path, const char* interface,
                          const char* property, sd_bus_message* reply,
                          void* userdata, sd_bus_error* error) {
-    return sd_bus_message_append(reply, "d", 1.0);
+    auto* backend = static_cast<MprisBackend*>(userdata);
+    return sd_bus_message_append(reply, "d", backend->getRate());
+}
+
+static int prop_set_rate(sd_bus* bus, const char* path, const char* interface,
+                         const char* property, sd_bus_message* value,
+                         void* userdata, sd_bus_error* error) {
+    auto* backend = static_cast<MprisBackend*>(userdata);
+    double rate;
+    int r = sd_bus_message_read(value, "d", &rate);
+    if (r < 0) return r;
+
+    // Clamp to valid range
+    if (rate < 0.25) rate = 0.25;
+    if (rate > 2.0) rate = 2.0;
+
+    if (backend->session()->onSetRate) {
+        backend->session()->onSetRate(rate);
+    }
+    return 0;
 }
 
 static int prop_get_min_rate(sd_bus* bus, const char* path, const char* interface,
                              const char* property, sd_bus_message* reply,
                              void* userdata, sd_bus_error* error) {
-    return sd_bus_message_append(reply, "d", 1.0);
+    return sd_bus_message_append(reply, "d", 0.25);
 }
 
 static int prop_get_max_rate(sd_bus* bus, const char* path, const char* interface,
                              const char* property, sd_bus_message* reply,
                              void* userdata, sd_bus_error* error) {
-    return sd_bus_message_append(reply, "d", 1.0);
+    return sd_bus_message_append(reply, "d", 2.0);
 }
 
 static int prop_get_can_go_next(sd_bus* bus, const char* path, const char* interface,
@@ -315,7 +334,7 @@ static int method_set_position(sd_bus_message* m, void* userdata, sd_bus_error* 
 static const sd_bus_vtable player_vtable[] = {
     SD_BUS_VTABLE_START(0),
     SD_BUS_PROPERTY("PlaybackStatus", "s", prop_get_playback_status, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
-    SD_BUS_PROPERTY("Rate", "d", prop_get_rate, 0, SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_WRITABLE_PROPERTY("Rate", "d", prop_get_rate, prop_set_rate, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
     SD_BUS_PROPERTY("MinimumRate", "d", prop_get_min_rate, 0, SD_BUS_VTABLE_PROPERTY_CONST),
     SD_BUS_PROPERTY("MaximumRate", "d", prop_get_max_rate, 0, SD_BUS_VTABLE_PROPERTY_CONST),
     SD_BUS_PROPERTY("Metadata", "a{sv}", prop_get_metadata, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
@@ -423,6 +442,13 @@ void MprisBackend::setCanGoPrevious(bool can) {
     if (can_go_previous_ != can) {
         can_go_previous_ = can;
         emitPropertiesChanged(MPRIS_PLAYER_IFACE, "CanGoPrevious");
+    }
+}
+
+void MprisBackend::setRate(double rate) {
+    if (rate_ != rate) {
+        rate_ = rate;
+        emitPropertiesChanged(MPRIS_PLAYER_IFACE, "Rate");
     }
 }
 

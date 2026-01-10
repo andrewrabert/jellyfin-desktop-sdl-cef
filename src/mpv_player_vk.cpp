@@ -255,6 +255,11 @@ void MpvPlayerVk::setMuted(bool muted) {
     mpv_set_property(mpv_, "mute", MPV_FORMAT_FLAG, &m);
 }
 
+void MpvPlayerVk::setSpeed(double speed) {
+    if (!mpv_) return;
+    mpv_set_property(mpv_, "speed", MPV_FORMAT_DOUBLE, &speed);
+}
+
 double MpvPlayerVk::getPosition() const {
     if (!mpv_) return 0;
     double pos = 0;

@@ -97,6 +97,7 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
     jmpNative->SetValue("playerSeek", CefV8Value::CreateFunction("playerSeek", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("playerSetVolume", CefV8Value::CreateFunction("playerSetVolume", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("playerSetMuted", CefV8Value::CreateFunction("playerSetMuted", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
+    jmpNative->SetValue("playerSetSpeed", CefV8Value::CreateFunction("playerSetSpeed", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("saveServerUrl", CefV8Value::CreateFunction("saveServerUrl", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("setFullscreen", CefV8Value::CreateFunction("setFullscreen", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("loadServer", CefV8Value::CreateFunction("loadServer", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
@@ -106,6 +107,7 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
     jmpNative->SetValue("notifyPlaybackState", CefV8Value::CreateFunction("notifyPlaybackState", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("notifyArtwork", CefV8Value::CreateFunction("notifyArtwork", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("notifyQueueChange", CefV8Value::CreateFunction("notifyQueueChange", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
+    jmpNative->SetValue("notifyRateChange", CefV8Value::CreateFunction("notifyRateChange", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     window->SetValue("jmpNative", jmpNative, V8_PROPERTY_ATTRIBUTE_READONLY);
 
     // Inject the JavaScript shim that creates window.api, window.NativeShell, etc.
@@ -258,6 +260,7 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
             },
             setPlaybackRate(rate) {
                 console.log('[Native] player.setPlaybackRate:', rate);
+                if (window.jmpNative) window.jmpNative.playerSetSpeed(rate);
             },
             setSubtitleStream(stream) {
                 console.log('[Native] player.setSubtitleStream:', stream);
@@ -306,6 +309,7 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
             // Signals for MPRIS control commands
             hostInput: createSignal('hostInput'),
             positionSeek: createSignal('positionSeek'),
+            rateChanged: createSignal('rateChanged'),
             volumeChanged: createSignal('volumeChanged'),
 
             executeActions(actions) {
@@ -347,9 +351,18 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
         console.log('[Native] _nativeHostInput:', actions);
         window.api.input.hostInput(actions);
     };
+    window._nativeSetRate = function(rate) {
+        console.log('[Native] _nativeSetRate:', rate);
+        window.api.input.rateChanged(rate);
+    };
     window._nativeSeek = function(positionMs) {
         console.log('[Native] _nativeSeek:', positionMs);
         window.api.input.positionSeek(positionMs);
+        // Update position immediately and set rate to 0 during buffering
+        if (window.jmpNative) {
+            window.jmpNative.notifyPosition(Math.floor(positionMs));
+            window.jmpNative.notifyRateChange(0.0);
+        }
     };
 
     // window.NativeShell - app info and plugins
@@ -714,6 +727,8 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
         setPlaybackRate(value) {
             this._playRate = +value;
             window.api.player.setPlaybackRate(this._playRate * 1000);
+            // Notify MPRIS directly (like jellyfin-desktop)
+            if (window.jmpNative) window.jmpNative.notifyRateChange(this._playRate);
         }
         getPlaybackRate() { return this._playRate || 1; }
         getSupportedPlaybackRates() {
@@ -936,7 +951,8 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
 
                     const positionDiff = Math.abs(positionMs - (self.lastReportedPosition || 0));
                     if (self.lastReportedPosition > 0 && positionDiff > 2000) {
-                        // Seek detected - notify seek (MPRIS will handle rate)
+                        // Player-initiated seek - set rate to 0 during buffering
+                        window.jmpNative.notifyRateChange(0.0);
                         window.jmpNative.notifySeek(Math.floor(positionMs));
                     } else if (positionDiff > 100) {
                         // Normal position update
@@ -1024,6 +1040,7 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
                     if (self.attachedPlayer) {
                         window.Events.off(self.attachedPlayer, 'playing');
                         window.Events.off(self.attachedPlayer, 'pause');
+                        window.Events.off(self.attachedPlayer, 'ratechange');
                     }
                     self.attachedPlayer = player;
 
@@ -1039,12 +1056,23 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
                             window.jmpNative.notifyPosition(Math.floor(pos));
                             self.lastReportedPosition = pos;
                         }
+
+                        // Restore rate after buffering (was set to 0 during seek)
+                        const rate = player.getPlaybackRate ? player.getPlaybackRate() : 1.0;
+                        window.jmpNative.notifyRateChange(rate);
                     });
 
                     // 'pause' fires when playback pauses
                     window.Events.on(player, 'pause', () => {
                         console.log('[MPRIS] player.pause event');
                         if (window.jmpNative) window.jmpNative.notifyPlaybackState('Paused');
+                    });
+
+                    // 'ratechange' fires when playback rate changes
+                    window.Events.on(player, 'ratechange', () => {
+                        const rate = player.getPlaybackRate ? player.getPlaybackRate() : 1.0;
+                        console.log('[MPRIS] player.ratechange event, rate:', rate);
+                        if (window.jmpNative) window.jmpNative.notifyRateChange(rate);
                     });
                 }
             });
@@ -1112,6 +1140,15 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
                         console.log('[MPRIS] Seeking to', percent.toFixed(2), '% (', positionMs, 'ms of', duration, 'ticks)');
                         pm.seekPercent(percent, currentPlayer);
                     }
+                }
+            });
+
+            // MPRIS rate change -> player
+            window.api.input.rateChanged.connect((rate) => {
+                console.log('[MPRIS] rateChanged received:', rate);
+                const currentPlayer = pm.getCurrentPlayer ? pm.getCurrentPlayer() : pm._currentPlayer;
+                if (currentPlayer && typeof currentPlayer.setPlaybackRate === 'function') {
+                    currentPlayer.setPlaybackRate(rate);
                 }
             });
 
@@ -1241,6 +1278,17 @@ bool NativeV8Handler::Execute(const CefString& name,
         return true;
     }
 
+    if (name == "playerSetSpeed") {
+        if (arguments.size() >= 1 && arguments[0]->IsInt()) {
+            int rateX1000 = arguments[0]->GetIntValue();
+            std::cerr << "[V8] playerSetSpeed: " << rateX1000 << std::endl;
+            CefRefPtr<CefProcessMessage> msg = CefProcessMessage::Create("playerSetSpeed");
+            msg->GetArgumentList()->SetInt(0, rateX1000);
+            browser_->GetMainFrame()->SendProcessMessage(PID_BROWSER, msg);
+        }
+        return true;
+    }
+
     if (name == "notifyMetadata") {
         if (arguments.size() >= 1 && arguments[0]->IsString()) {
             std::string metadata = arguments[0]->GetStringValue().ToString();
@@ -1302,6 +1350,17 @@ bool NativeV8Handler::Execute(const CefString& name,
             CefRefPtr<CefProcessMessage> msg = CefProcessMessage::Create("notifyQueueChange");
             msg->GetArgumentList()->SetBool(0, canNext);
             msg->GetArgumentList()->SetBool(1, canPrev);
+            browser_->GetMainFrame()->SendProcessMessage(PID_BROWSER, msg);
+        }
+        return true;
+    }
+
+    if (name == "notifyRateChange") {
+        if (arguments.size() >= 1 && arguments[0]->IsDouble()) {
+            double rate = arguments[0]->GetDoubleValue();
+            std::cerr << "[V8] notifyRateChange: " << rate << std::endl;
+            CefRefPtr<CefProcessMessage> msg = CefProcessMessage::Create("notifyRateChange");
+            msg->GetArgumentList()->SetDouble(0, rate);
             browser_->GetMainFrame()->SendProcessMessage(PID_BROWSER, msg);
         }
         return true;

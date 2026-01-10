@@ -15,6 +15,7 @@ public:
     void setVolume(double volume) override;
     void setCanGoNext(bool can) override;
     void setCanGoPrevious(bool can) override;
+    void setRate(double rate) override;
     void emitSeeked(int64_t position_us) override;  // Emit Seeked signal when user seeks
     void update() override;
     int getFd() override;
@@ -23,6 +24,7 @@ public:
     const char* getPlaybackStatus() const;
     int64_t getPosition() const { return position_us_; }
     double getVolume() const { return volume_; }
+    double getRate() const { return rate_; }
     bool canGoNext() const { return can_go_next_; }
     bool canGoPrevious() const { return can_go_previous_; }
     const MediaMetadata& getMetadata() const { return metadata_; }
@@ -40,6 +42,7 @@ private:
     PlaybackState state_ = PlaybackState::Stopped;
     int64_t position_us_ = 0;
     double volume_ = 1.0;
+    double rate_ = 1.0;
     bool can_go_next_ = false;
     bool can_go_previous_ = false;
 };

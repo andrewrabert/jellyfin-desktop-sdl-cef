@@ -422,6 +422,7 @@ int main(int argc, char* argv[]) {
         std::string cmd;
         std::string url;
         int intArg;
+        double doubleArg;
         std::string metadata;  // JSON for load command
     };
     std::mutex cmd_mutex;
@@ -432,34 +433,38 @@ int main(int argc, char* argv[]) {
     MediaSession mediaSession;
     mediaSession.onPlay = [&]() {
         std::lock_guard<std::mutex> lock(cmd_mutex);
-        pending_cmds.push_back({"mpris_action", "play", 0});
+        pending_cmds.push_back({"mpris_action", "play", 0, 0.0});
     };
     mediaSession.onPause = [&]() {
         std::lock_guard<std::mutex> lock(cmd_mutex);
-        pending_cmds.push_back({"mpris_action", "pause", 0});
+        pending_cmds.push_back({"mpris_action", "pause", 0, 0.0});
     };
     mediaSession.onPlayPause = [&]() {
         std::lock_guard<std::mutex> lock(cmd_mutex);
-        pending_cmds.push_back({"mpris_action", "play_pause", 0});
+        pending_cmds.push_back({"mpris_action", "play_pause", 0, 0.0});
     };
     mediaSession.onStop = [&]() {
         std::lock_guard<std::mutex> lock(cmd_mutex);
-        pending_cmds.push_back({"mpris_action", "stop", 0});
+        pending_cmds.push_back({"mpris_action", "stop", 0, 0.0});
     };
     mediaSession.onSeek = [&](int64_t position_us) {
         std::lock_guard<std::mutex> lock(cmd_mutex);
-        pending_cmds.push_back({"mpris_seek", "", static_cast<int>(position_us / 1000)});
+        pending_cmds.push_back({"mpris_seek", "", static_cast<int>(position_us / 1000), 0.0});
     };
     mediaSession.onNext = [&]() {
         std::lock_guard<std::mutex> lock(cmd_mutex);
-        pending_cmds.push_back({"mpris_action", "next", 0});
+        pending_cmds.push_back({"mpris_action", "next", 0, 0.0});
     };
     mediaSession.onPrevious = [&]() {
         std::lock_guard<std::mutex> lock(cmd_mutex);
-        pending_cmds.push_back({"mpris_action", "previous", 0});
+        pending_cmds.push_back({"mpris_action", "previous", 0, 0.0});
     };
     mediaSession.onRaise = [&]() {
         SDL_RaiseWindow(window);
+    };
+    mediaSession.onSetRate = [&](double rate) {
+        std::lock_guard<std::mutex> lock(cmd_mutex);
+        pending_cmds.push_back({"mpris_rate", "", 0, rate});
     };
 #endif
 
@@ -532,7 +537,7 @@ int main(int argc, char* argv[]) {
         },
         [&](const std::string& cmd, const std::string& arg, int intArg, const std::string& metadata) {
             std::lock_guard<std::mutex> lock(cmd_mutex);
-            pending_cmds.push_back({cmd, arg, intArg, metadata});
+            pending_cmds.push_back({cmd, arg, intArg, 0.0, metadata});
         },
 #ifdef __APPLE__
         nullptr,  // No GPU accelerated paint on macOS (using Metal compositor)
@@ -978,6 +983,9 @@ int main(int argc, char* argv[]) {
                     mpv.setVolume(cmd.intArg);
                 } else if (cmd.cmd == "mute") {
                     mpv.setMuted(cmd.intArg != 0);
+                } else if (cmd.cmd == "speed") {
+                    double speed = cmd.intArg / 1000.0;
+                    mpv.setSpeed(speed);
                 } else if (cmd.cmd == "fullscreen") {
                     bool enable = cmd.intArg != 0;
                     SDL_SetWindowFullscreen(window, enable);
@@ -1005,6 +1013,10 @@ int main(int argc, char* argv[]) {
                     bool canPrev = (cmd.intArg & 2) != 0;
                     mediaSession.setCanGoNext(canNext);
                     mediaSession.setCanGoPrevious(canPrev);
+                } else if (cmd.cmd == "mpris_notify_rate") {
+                    // Rate was encoded as rate * 1000000
+                    double rate = static_cast<double>(cmd.intArg) / 1000000.0;
+                    mediaSession.setRate(rate);
                 } else if (cmd.cmd == "mpris_seeked") {
                     // JS detected a seek - emit Seeked signal to MPRIS
                     int64_t pos_us = static_cast<int64_t>(cmd.intArg) * 1000;
@@ -1017,6 +1029,9 @@ int main(int argc, char* argv[]) {
                     // Route MPRIS seek to JS playbackManager
                     std::string js = "if(window._nativeSeek) window._nativeSeek(" + std::to_string(cmd.intArg) + ");";
                     client->executeJS(js);
+                } else if (cmd.cmd == "mpris_rate") {
+                    // Route MPRIS rate change to JS player
+                    client->emitRateChanged(cmd.doubleArg);
                 }
             }
             pending_cmds.clear();
