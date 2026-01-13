@@ -989,6 +989,7 @@ int main(int argc, char* argv[]) {
                 } else if (cmd.cmd == "fullscreen") {
                     bool enable = cmd.intArg != 0;
                     SDL_SetWindowFullscreen(window, enable);
+#ifndef __APPLE__
                 } else if (cmd.cmd == "mpris_metadata") {
                     MediaMetadata meta = parseMetadataJson(cmd.url);
                     std::cerr << "[MAIN] MPRIS metadata: title=" << meta.title << std::endl;
@@ -1032,6 +1033,7 @@ int main(int argc, char* argv[]) {
                 } else if (cmd.cmd == "mpris_rate") {
                     // Route MPRIS rate change to JS player
                     client->emitRateChanged(cmd.doubleArg);
+#endif
                 }
             }
             pending_cmds.clear();
