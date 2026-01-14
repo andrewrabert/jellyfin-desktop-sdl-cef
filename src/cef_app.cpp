@@ -523,13 +523,15 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
                 this.events.trigger(this, 'timeupdate');
             };
             this.onPlaying = () => {
-                console.log('[MPV] onPlaying callback fired, _started:', this._started);
                 if (!this._started) {
                     this._started = true;
-                    console.log('[MPV] First play - hiding loading, showing OSD');
                     this.loading.hide();
                     const dlg = this._videoDialog;
-                    if (dlg) dlg.style.backgroundImage = '';
+                    // Remove poster so video shows through from subsurface
+                    if (dlg) {
+                        const poster = dlg.querySelector('.mpvPoster');
+                        if (poster) poster.remove();
+                    }
                     if (this._currentPlayOptions?.fullscreen) {
                         this.appRouter.showVideoOsd();
                         if (dlg) dlg.style.zIndex = 'unset';
@@ -626,8 +628,19 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
         }
 
         stop(destroyPlayer) {
+            // Restore poster before stopping so it's visible during transition
+            if (!destroyPlayer && this._videoDialog && this._currentPlayOptions?.backdropUrl) {
+                const dlg = this._videoDialog;
+                const url = this._currentPlayOptions.backdropUrl;
+                if (!dlg.querySelector('.mpvPoster')) {
+                    const poster = document.createElement('div');
+                    poster.classList.add('mpvPoster');
+                    poster.style.cssText = `position:absolute;top:0;left:0;right:0;bottom:0;background:#000 url('${url}') center/cover no-repeat;`;
+                    dlg.appendChild(poster);
+                }
+            }
             window.api.player.stop();
-            this.onEnded();  // Use guarded version to prevent double-fire
+            this.onEnded();
             if (destroyPlayer) this.destroy();
             return Promise.resolve();
         }
@@ -657,25 +670,19 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
         }
 
         createMediaElement(options) {
-            console.log('[MPV] createMediaElement called, _hasConnection:', this._hasConnection);
             let dlg = document.querySelector('.videoPlayerContainer');
             if (!dlg) {
                 dlg = document.createElement('div');
                 dlg.classList.add('videoPlayerContainer');
-                dlg.style.cssText = 'position:fixed;top:0;bottom:0;left:0;right:0;display:flex;align-items:center;';
+                // Container transparent so mpv video shows through from subsurface below
+                dlg.style.cssText = 'position:fixed;top:0;bottom:0;left:0;right:0;display:flex;align-items:center;background:transparent;';
                 if (options.fullscreen) dlg.style.zIndex = 1000;
-                if (options.backdropUrl) {
-                    dlg.style.backgroundImage = `url('${options.backdropUrl}')`;
-                    dlg.style.backgroundSize = 'cover';
-                    dlg.style.backgroundPosition = 'center';
-                }
                 document.body.insertBefore(dlg, document.body.firstChild);
                 this.setTransparency(2);
                 this._videoDialog = dlg;
 
                 const player = window.api.player;
                 if (!this._hasConnection) {
-                    console.log('[MPV] Connecting signals to window.api.player');
                     this._hasConnection = true;
                     player.playing.connect(this.onPlaying);
                     player.positionUpdate.connect(this.onTimeUpdate);
@@ -683,8 +690,19 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
                     player.updateDuration.connect(this.onDuration);
                     player.error.connect(this.onError);
                     player.paused.connect(this.onPause);
-                    console.log('[MPV] Signals connected');
                 }
+            } else {
+                this._videoDialog = dlg;
+            }
+            // Poster div (like videoElement.poster) - black bg + image, removed when video plays
+            if (options.backdropUrl) {
+                const existing = dlg.querySelector('.mpvPoster');
+                if (existing) existing.remove();
+                const poster = document.createElement('div');
+                poster.classList.add('mpvPoster');
+                // Black background prevents seeing through during load; image on top
+                poster.style.cssText = `position:absolute;top:0;left:0;right:0;bottom:0;background:#000 url('${options.backdropUrl}') center/cover no-repeat;`;
+                dlg.appendChild(poster);
             }
             if (options.fullscreen) document.body.classList.add('hide-scroll');
             return Promise.resolve();
