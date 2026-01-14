@@ -65,6 +65,7 @@ public:
     void setStateCallback(StateCallback cb) { on_state_ = cb; }
     void setPlayingCallback(PlaybackCallback cb) { on_playing_ = cb; }
     void setFinishedCallback(PlaybackCallback cb) { on_finished_ = cb; }
+    void setCanceledCallback(PlaybackCallback cb) { on_canceled_ = cb; }
 
     bool isHdr() const { return subsurface_ && subsurface_->isHdr(); }
     VideoSurface* subsurface() const { return subsurface_; }
@@ -85,6 +86,7 @@ private:
     StateCallback on_state_;
     PlaybackCallback on_playing_;
     PlaybackCallback on_finished_;
+    PlaybackCallback on_canceled_;
 
     std::atomic<bool> needs_redraw_{false};
     std::atomic<bool> has_events_{false};

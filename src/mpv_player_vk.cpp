@@ -75,7 +75,12 @@ void MpvPlayerVk::handleMpvEvent(mpv_event* event) {
         case MPV_EVENT_END_FILE: {
             mpv_event_end_file* ef = static_cast<mpv_event_end_file*>(event->data);
             playing_ = false;
-            if (on_finished_) on_finished_();
+            // Distinguish user stop from natural end (like jellyfin-desktop)
+            if (ef->reason == MPV_END_FILE_REASON_STOP) {
+                if (on_canceled_) on_canceled_();
+            } else {
+                if (on_finished_) on_finished_();
+            }
             break;
         }
         default:

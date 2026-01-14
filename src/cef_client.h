@@ -126,6 +126,7 @@ public:
     void emitPlaying();
     void emitPaused();
     void emitFinished();
+    void emitCanceled();
     void emitError(const std::string& msg);
     void emitRateChanged(double rate);
     void updatePosition(double positionMs);

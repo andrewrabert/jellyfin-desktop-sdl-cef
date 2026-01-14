@@ -460,6 +460,10 @@ void Client::emitFinished() {
     executeJS("if(window._nativeEmit) window._nativeEmit('finished');");
 }
 
+void Client::emitCanceled() {
+    executeJS("if(window._nativeEmit) window._nativeEmit('canceled');");
+}
+
 void Client::emitError(const std::string& msg) {
     executeJS("if(window._nativeEmit) window._nativeEmit('error', '" + msg + "');");
 }

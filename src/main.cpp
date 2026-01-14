@@ -661,6 +661,13 @@ int main(int argc, char* argv[]) {
         mediaSession.setPlaybackState(PlaybackState::Stopped);
 #endif
     });
+    mpv.setCanceledCallback([&]() {
+        has_video = false;
+        client->emitCanceled();
+#ifndef __APPLE__
+        mediaSession.setPlaybackState(PlaybackState::Stopped);
+#endif
+    });
 
     // Auto-load test video if provided via --video
     if (!test_video.empty()) {
