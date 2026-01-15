@@ -415,6 +415,15 @@ void MprisBackend::setPlaybackState(PlaybackState state) {
         position_us_ = 0;
     }
 
+    // When resuming playback, unlock rate and restore pending rate
+    if (state == PlaybackState::Playing && rate_locked_) {
+        rate_locked_ = false;
+        if (rate_ != pending_rate_) {
+            rate_ = pending_rate_;
+            emitPropertiesChanged(MPRIS_PLAYER_IFACE, "Rate");
+        }
+    }
+
     // Emit all capability-related properties when state changes
     // MPRIS clients need to know when controls become available/unavailable
     sd_bus_emit_properties_changed(bus_, MPRIS_PATH, MPRIS_PLAYER_IFACE,
@@ -446,9 +455,23 @@ void MprisBackend::setCanGoPrevious(bool can) {
 }
 
 void MprisBackend::setRate(double rate) {
-    if (rate_ != rate) {
-        rate_ = rate;
-        emitPropertiesChanged(MPRIS_PLAYER_IFACE, "Rate");
+    if (rate == 0.0) {
+        // Entering buffering/seeking - lock at 0x
+        rate_locked_ = true;
+        if (rate_ != 0.0) {
+            rate_ = 0.0;
+            emitPropertiesChanged(MPRIS_PLAYER_IFACE, "Rate");
+        }
+    } else if (rate_locked_) {
+        // While locked, store rate for when we resume
+        pending_rate_ = rate;
+    } else {
+        // Normal operation
+        pending_rate_ = rate;
+        if (rate_ != rate) {
+            rate_ = rate;
+            emitPropertiesChanged(MPRIS_PLAYER_IFACE, "Rate");
+        }
     }
 }
 

@@ -43,6 +43,8 @@ private:
     int64_t position_us_ = 0;
     double volume_ = 1.0;
     double rate_ = 1.0;
+    double pending_rate_ = 1.0;  // Stored rate while locked at 0x
+    bool rate_locked_ = false;   // True when rate is locked at 0x (buffering/seeking)
     bool can_go_next_ = false;
     bool can_go_previous_ = false;
 };

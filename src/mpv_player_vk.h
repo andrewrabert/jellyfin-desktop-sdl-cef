@@ -23,6 +23,9 @@ public:
     using DurationCallback = std::function<void(double ms)>;
     using StateCallback = std::function<void(bool paused)>;
     using PlaybackCallback = std::function<void()>;  // playing, finished, error
+    using SeekCallback = std::function<void(double ms)>;  // seek completed with position
+    using BufferingCallback = std::function<void(bool buffering, double ms)>;
+    using CoreIdleCallback = std::function<void(bool idle, double ms)>;
 
     MpvPlayerVk();
     ~MpvPlayerVk();
@@ -52,6 +55,7 @@ public:
     // State queries
     double getPosition() const;
     double getDuration() const;
+    double getSpeed() const;
     bool isPaused() const;
     bool isPlaying() const { return playing_; }
 
@@ -66,6 +70,9 @@ public:
     void setPlayingCallback(PlaybackCallback cb) { on_playing_ = cb; }
     void setFinishedCallback(PlaybackCallback cb) { on_finished_ = cb; }
     void setCanceledCallback(PlaybackCallback cb) { on_canceled_ = cb; }
+    void setSeekedCallback(SeekCallback cb) { on_seeked_ = cb; }
+    void setBufferingCallback(BufferingCallback cb) { on_buffering_ = cb; }
+    void setCoreIdleCallback(CoreIdleCallback cb) { on_core_idle_ = cb; }
 
     bool isHdr() const { return subsurface_ && subsurface_->isHdr(); }
     VideoSurface* subsurface() const { return subsurface_; }
@@ -87,9 +94,13 @@ private:
     PlaybackCallback on_playing_;
     PlaybackCallback on_finished_;
     PlaybackCallback on_canceled_;
+    SeekCallback on_seeked_;
+    BufferingCallback on_buffering_;
+    CoreIdleCallback on_core_idle_;
 
     std::atomic<bool> needs_redraw_{false};
     std::atomic<bool> has_events_{false};
     bool playing_ = false;
+    bool seeking_ = false;
     double last_position_ = 0.0;
 };

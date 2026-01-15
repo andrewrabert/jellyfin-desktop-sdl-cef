@@ -274,6 +274,7 @@ int main(int argc, char* argv[]) {
     // Initialize mpv player (using video layer's Vulkan context)
     MpvPlayerVk mpv;
     bool has_video = false;
+    double current_playback_rate = 1.0;
     if (!mpv.init(nullptr, &videoLayer)) {
         std::cerr << "MpvPlayerVk init failed" << std::endl;
         SDL_DestroyWindow(window);
@@ -326,6 +327,7 @@ int main(int argc, char* argv[]) {
     // Initialize mpv player (using subsurface's Vulkan context)
     MpvPlayerVk mpv;
     bool has_video = false;
+    double current_playback_rate = 1.0;
     if (!mpv.init(nullptr, &subsurface)) {
         std::cerr << "MpvPlayerVk init failed" << std::endl;
         SDL_DestroyWindow(window);
@@ -622,7 +624,6 @@ int main(int argc, char* argv[]) {
 
     // Set up mpv event callbacks (event-driven like jellyfin-desktop)
     mpv.setPositionCallback([&](double ms) {
-        client->updatePosition(ms);
 #ifndef __APPLE__
         mediaSession.setPosition(static_cast<int64_t>(ms * 1000.0));
 #endif
@@ -633,7 +634,9 @@ int main(int argc, char* argv[]) {
     mpv.setPlayingCallback([&]() {
         // FILE_LOADED - initial playback start
         client->emitPlaying();
+        client->updatePosition(mpv.getPosition());
 #ifndef __APPLE__
+        mediaSession.setPosition(static_cast<int64_t>(mpv.getPosition() * 1000.0));
         mediaSession.setPlaybackState(PlaybackState::Playing);
 #endif
     });
@@ -642,14 +645,18 @@ int main(int argc, char* argv[]) {
         if (!mpv.isPlaying()) return;
 
         // pause property changed - pause/resume
+        double pos = mpv.getPosition();
+        client->updatePosition(pos);
         if (paused) {
             client->emitPaused();
 #ifndef __APPLE__
+            mediaSession.setPosition(static_cast<int64_t>(pos * 1000.0));
             mediaSession.setPlaybackState(PlaybackState::Paused);
 #endif
         } else {
             client->emitPlaying();
 #ifndef __APPLE__
+            mediaSession.setPosition(static_cast<int64_t>(pos * 1000.0));
             mediaSession.setPlaybackState(PlaybackState::Playing);
 #endif
         }
@@ -666,6 +673,31 @@ int main(int argc, char* argv[]) {
         client->emitCanceled();
 #ifndef __APPLE__
         mediaSession.setPlaybackState(PlaybackState::Stopped);
+#endif
+    });
+    mpv.setSeekedCallback([&](double ms) {
+        client->updatePosition(ms);
+#ifndef __APPLE__
+        mediaSession.setPosition(static_cast<int64_t>(ms * 1000.0));
+        mediaSession.setRate(current_playback_rate);
+        mediaSession.emitSeeked(static_cast<int64_t>(ms * 1000.0));
+#endif
+    });
+    mpv.setBufferingCallback([&](bool buffering, double ms) {
+#ifndef __APPLE__
+        mediaSession.setPosition(static_cast<int64_t>(ms * 1000.0));
+        if (buffering) {
+            mediaSession.setRate(0.0);
+        } else {
+            mediaSession.setRate(current_playback_rate);
+        }
+#endif
+    });
+    mpv.setCoreIdleCallback([&](bool idle, double ms) {
+#ifndef __APPLE__
+        mediaSession.setPosition(static_cast<int64_t>(ms * 1000.0));
+#else
+        (void)idle; (void)ms;
 #endif
     });
 
@@ -1024,6 +1056,7 @@ int main(int argc, char* argv[]) {
                 } else if (cmd.cmd == "mpris_notify_rate") {
                     // Rate was encoded as rate * 1000000
                     double rate = static_cast<double>(cmd.intArg) / 1000000.0;
+                    current_playback_rate = rate;
                     mediaSession.setRate(rate);
                 } else if (cmd.cmd == "mpris_seeked") {
                     // JS detected a seek - emit Seeked signal to MPRIS

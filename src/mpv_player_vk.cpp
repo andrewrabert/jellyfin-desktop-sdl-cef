@@ -63,6 +63,19 @@ void MpvPlayerVk::handleMpvEvent(mpv_event* event) {
             } else if (strcmp(prop->name, "pause") == 0 && prop->format == MPV_FORMAT_FLAG) {
                 bool paused = *static_cast<int*>(prop->data) != 0;
                 if (on_state_) on_state_(paused);
+            } else if (strcmp(prop->name, "seeking") == 0 && prop->format == MPV_FORMAT_FLAG) {
+                bool seeking = *static_cast<int*>(prop->data) != 0;
+                if (seeking_ && !seeking) {
+                    // Seek completed - report position
+                    if (on_seeked_) on_seeked_(last_position_ * 1000.0);
+                }
+                seeking_ = seeking;
+            } else if (strcmp(prop->name, "paused-for-cache") == 0 && prop->format == MPV_FORMAT_FLAG) {
+                bool buffering = *static_cast<int*>(prop->data) != 0;
+                if (on_buffering_) on_buffering_(buffering, last_position_ * 1000.0);
+            } else if (strcmp(prop->name, "core-idle") == 0 && prop->format == MPV_FORMAT_FLAG) {
+                bool idle = *static_cast<int*>(prop->data) != 0;
+                if (on_core_idle_) on_core_idle_(idle, last_position_ * 1000.0);
             }
             break;
         }
@@ -139,6 +152,9 @@ bool MpvPlayerVk::init(VulkanContext* vk, VideoSurface* subsurface) {
     mpv_observe_property(mpv_, 0, "playback-time", MPV_FORMAT_DOUBLE);
     mpv_observe_property(mpv_, 0, "duration", MPV_FORMAT_DOUBLE);
     mpv_observe_property(mpv_, 0, "pause", MPV_FORMAT_FLAG);
+    mpv_observe_property(mpv_, 0, "seeking", MPV_FORMAT_FLAG);
+    mpv_observe_property(mpv_, 0, "paused-for-cache", MPV_FORMAT_FLAG);
+    mpv_observe_property(mpv_, 0, "core-idle", MPV_FORMAT_FLAG);
 
     // Wakeup callback for event-driven processing
     mpv_set_wakeup_callback(mpv_, onMpvWakeup, this);
@@ -270,6 +286,13 @@ double MpvPlayerVk::getPosition() const {
     double pos = 0;
     mpv_get_property(mpv_, "time-pos", MPV_FORMAT_DOUBLE, &pos);
     return pos;
+}
+
+double MpvPlayerVk::getSpeed() const {
+    if (!mpv_) return 1.0;
+    double speed = 1.0;
+    mpv_get_property(mpv_, "speed", MPV_FORMAT_DOUBLE, &speed);
+    return speed;
 }
 
 double MpvPlayerVk::getDuration() const {

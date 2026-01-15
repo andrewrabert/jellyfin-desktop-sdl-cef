@@ -520,7 +520,27 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
             this.onTimeUpdate = (time) => {
                 if (time && !this._timeUpdated) this._timeUpdated = true;
                 this._currentTime = time;
+                this._lastTimeSync = Date.now();
                 this.events.trigger(this, 'timeupdate');
+            };
+            this.startTimeUpdateTimer = () => {
+                if (this._timeUpdateTimer) return;
+                this._lastTimerTick = Date.now();
+                this._timeUpdateTimer = setInterval(() => {
+                    if (this._paused || this._currentTime === null) return;
+                    const now = Date.now();
+                    const elapsed = now - this._lastTimerTick;
+                    this._lastTimerTick = now;
+                    const rate = this.getPlaybackRate() || 1.0;
+                    this._currentTime += elapsed * rate;
+                    this.events.trigger(this, 'timeupdate');
+                }, 250);
+            };
+            this.stopTimeUpdateTimer = () => {
+                if (this._timeUpdateTimer) {
+                    clearInterval(this._timeUpdateTimer);
+                    this._timeUpdateTimer = null;
+                }
             };
             this.onPlaying = () => {
                 if (!this._started) {
@@ -542,11 +562,13 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
                     this._paused = false;
                     this.events.trigger(this, 'unpause');
                 }
+                this.startTimeUpdateTimer();
                 this.events.trigger(this, 'playing');
                 console.log('[MPV] playing event triggered');
             };
             this.onPause = () => {
                 this._paused = true;
+                this.stopTimeUpdateTimer();
                 this.events.trigger(this, 'pause');
             };
             this.onError = (error) => {
@@ -658,6 +680,7 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
         }
 
         destroy() {
+            this.stopTimeUpdateTimer();
             this.removeMediaDialog();
             const player = window.api.player;
             this._hasConnection = false;
@@ -690,6 +713,10 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
                     player.updateDuration.connect(this.onDuration);
                     player.error.connect(this.onError);
                     player.paused.connect(this.onPause);
+                    // Send initial rate/volume to HOST before any playback
+                    if (window.jmpNative) {
+                        window.jmpNative.notifyRateChange(this._playRate);
+                    }
                 }
             } else {
                 this._videoDialog = dlg;
@@ -949,44 +976,61 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
         }
 
         startPositionUpdates() {
-            if (this.positionInterval) clearInterval(this.positionInterval);
             const pm = this.playbackManager;
-            const self = this;
+            const player = this.attachedPlayer;
 
             // Report initial position
             const initialPos = pm.currentTime ? pm.currentTime() : 0;
             if (typeof initialPos === 'number' && initialPos >= 0) {
                 window.jmpNative.notifyPosition(Math.floor(initialPos));
-                this.lastReportedPosition = initialPos;
             }
 
-            // Poll position like jellyfin-desktop (500ms interval)
-            this.positionInterval = setInterval(() => {
-                if (!window.jmpNative || !pm) return;
-                try {
-                    const positionMs = pm.currentTime ? pm.currentTime() : 0;
-                    if (typeof positionMs !== 'number' || positionMs < 0) return;
+            // Initialize drift tracking - only notify on anomalies (seek/stall)
+            this.positionTracking = {
+                startTime: Date.now(),
+                startPos: initialPos,
+                rate: (player && player.getPlaybackRate) ? player.getPlaybackRate() : 1.0
+            };
+        }
 
-                    const positionDiff = Math.abs(positionMs - (self.lastReportedPosition || 0));
-                    if (self.lastReportedPosition > 0 && positionDiff > 2000) {
-                        // Player-initiated seek - set rate to 0 during buffering
-                        window.jmpNative.notifyRateChange(0.0);
-                        window.jmpNative.notifySeek(Math.floor(positionMs));
-                    } else if (positionDiff > 100) {
-                        // Normal position update
-                        window.jmpNative.notifyPosition(Math.floor(positionMs));
-                    }
-                    self.lastReportedPosition = positionMs;
-                } catch (e) {}
-            }, 500);
+        resetPositionTracking() {
+            const pm = this.playbackManager;
+            const player = this.attachedPlayer;
+            const pos = pm.currentTime ? pm.currentTime() : 0;
+            this.positionTracking = {
+                startTime: Date.now(),
+                startPos: pos,
+                rate: (player && player.getPlaybackRate) ? player.getPlaybackRate() : 1.0
+            };
+        }
+
+        checkPositionDrift() {
+            if (!this.positionTracking || !this.playbackManager) return;
+            const pm = this.playbackManager;
+            const actual = pm.currentTime ? pm.currentTime() : 0;
+            if (typeof actual !== 'number' || actual < 0) return;
+
+            const elapsed = Date.now() - this.positionTracking.startTime;
+            const expected = this.positionTracking.startPos + (elapsed * this.positionTracking.rate);
+            const drift = actual - expected;
+
+            if (Math.abs(drift) > 2000) {
+                console.log('[MPRIS] Position drift detected: expected=' + Math.floor(expected) + ' actual=' + Math.floor(actual) + ' drift=' + Math.floor(drift));
+                if (drift > 0) {
+                    // Position ahead of expected - seek forward detected
+                    window.jmpNative.notifySeek(Math.floor(actual));
+                } else {
+                    // Position behind expected - stall/buffer detected
+                    window.jmpNative.notifyRateChange(0.0);
+                    window.jmpNative.notifyPosition(Math.floor(actual));
+                }
+                // Reset tracking after anomaly
+                this.resetPositionTracking();
+            }
         }
 
         stopPositionUpdates() {
-            if (this.positionInterval) {
-                clearInterval(this.positionInterval);
-                this.positionInterval = null;
-            }
-            this.lastReportedPosition = 0;
+            this.positionTracking = null;
         }
 
         updateQueueState() {
@@ -1037,16 +1081,8 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
                     self.notifyMetadata(state.NowPlayingItem);
                 }
 
-                // Report initial position immediately (like jellyfin-desktop)
-                const initialPos = pm.currentTime ? pm.currentTime() : 0;
-                if (initialPos !== undefined && initialPos !== null) {
-                    console.log('[MPRIS] Initial position:', initialPos);
-                    window.jmpNative.notifyPosition(Math.floor(initialPos));
-                    self.lastReportedPosition = initialPos;
-                }
-
                 // 'playing' event fires BEFORE playbackstart, so send Playing state now
-                // and start position updates
+                // and start position updates (reports initial position + initializes drift tracking)
                 console.log('[MPRIS] Sending Playing state from playbackstart');
                 if (window.jmpNative) window.jmpNative.notifyPlaybackState('Playing');
                 self.startPositionUpdates();
@@ -1059,6 +1095,7 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
                         window.Events.off(self.attachedPlayer, 'playing');
                         window.Events.off(self.attachedPlayer, 'pause');
                         window.Events.off(self.attachedPlayer, 'ratechange');
+                        window.Events.off(self.attachedPlayer, 'timeupdate');
                     }
                     self.attachedPlayer = player;
 
@@ -1068,12 +1105,12 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
                         if (window.jmpNative) window.jmpNative.notifyPlaybackState('Playing');
                         self.updateQueueState();
 
-                        // Report position when playback starts/resumes (like jellyfin-desktop)
+                        // Report position and reset drift tracking on resume
                         const pos = pm.currentTime ? pm.currentTime() : 0;
                         if (pos !== undefined && pos !== null) {
                             window.jmpNative.notifyPosition(Math.floor(pos));
-                            self.lastReportedPosition = pos;
                         }
+                        self.resetPositionTracking();
 
                         // Restore rate after buffering (was set to 0 during seek)
                         const rate = player.getPlaybackRate ? player.getPlaybackRate() : 1.0;
@@ -1083,14 +1120,32 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
                     // 'pause' fires when playback pauses
                     window.Events.on(player, 'pause', () => {
                         console.log('[MPRIS] player.pause event');
-                        if (window.jmpNative) window.jmpNative.notifyPlaybackState('Paused');
+                        if (window.jmpNative) {
+                            window.jmpNative.notifyPlaybackState('Paused');
+                            const pos = pm.currentTime ? pm.currentTime() : 0;
+                            if (typeof pos === 'number' && pos >= 0) {
+                                window.jmpNative.notifyPosition(Math.floor(pos));
+                            }
+                        }
                     });
 
                     // 'ratechange' fires when playback rate changes
                     window.Events.on(player, 'ratechange', () => {
                         const rate = player.getPlaybackRate ? player.getPlaybackRate() : 1.0;
                         console.log('[MPRIS] player.ratechange event, rate:', rate);
-                        if (window.jmpNative) window.jmpNative.notifyRateChange(rate);
+                        if (window.jmpNative) {
+                            window.jmpNative.notifyRateChange(rate);
+                            const pos = pm.currentTime ? pm.currentTime() : 0;
+                            if (typeof pos === 'number' && pos >= 0) {
+                                window.jmpNative.notifyPosition(Math.floor(pos));
+                            }
+                        }
+                        self.resetPositionTracking();
+                    });
+
+                    // 'timeupdate' fires on position changes - check for drift anomalies
+                    window.Events.on(player, 'timeupdate', () => {
+                        self.checkPositionDrift();
                     });
                 }
             });
@@ -1184,6 +1239,7 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
             if (this.attachedPlayer && window.Events) {
                 window.Events.off(this.attachedPlayer, 'playing');
                 window.Events.off(this.attachedPlayer, 'pause');
+                window.Events.off(this.attachedPlayer, 'ratechange');
                 window.Events.off(this.attachedPlayer, 'timeupdate');
                 this.attachedPlayer = null;
             }
