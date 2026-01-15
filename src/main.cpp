@@ -209,7 +209,14 @@ int main(int argc, char* argv[]) {
     std::string test_video;
     bool use_gpu_overlay = false;  // DMA-BUF shared textures (experimental)
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--video") == 0 && i + 1 < argc) {
+        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+            std::cout << "Usage: jellyfin-desktop [options]\n"
+                      << "\nOptions:\n"
+                      << "  -h, --help       Show this help message\n"
+                      << "  --video <file>   Load video file on startup\n"
+                      << "  --gpu-overlay    Enable GPU overlay (experimental)\n";
+            return 0;
+        } else if (strcmp(argv[i], "--video") == 0 && i + 1 < argc) {
             test_video = argv[++i];
         } else if (strcmp(argv[i], "--gpu-overlay") == 0) {
             use_gpu_overlay = true;
