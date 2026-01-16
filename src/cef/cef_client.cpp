@@ -554,6 +554,15 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
         return true;
     }
 
+    if (name == "saveServerUrl") {
+        std::string url = args->GetString(0).ToString();
+        std::cerr << "[Overlay IPC] Saving server URL: " << url << std::endl;
+        Settings::instance().setServerUrl(url);
+        Settings::instance().save();
+        return true;
+    }
+
+    std::cerr << "[Overlay IPC] Unhandled: " << name << std::endl;
     return false;
 }
 
