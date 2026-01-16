@@ -26,52 +26,18 @@
             this.isLocalPlayer = true;
             this.isFetching = false;
 
+            this._core = new window.MpvPlayerCore(events);
+            this._core.player = this;
+
             this._videoDialog = undefined;
             this._currentSrc = undefined;
             this._started = false;
             this._timeUpdated = false;
-            this._currentTime = 0;
             this._currentPlayOptions = undefined;
-            this._duration = undefined;
-            this._paused = false;
-            this._volume = 100;
-            this._muted = false;
-            this._playRate = 1;
-            this._hasConnection = false;
-
             this._endedPending = false;
-            this.onEnded = () => {
-                if (!this._endedPending) {
-                    this._endedPending = true;
-                    this.onEndedInternal();
-                }
-            };
-            this.onTimeUpdate = (time) => {
-                if (time && !this._timeUpdated) this._timeUpdated = true;
-                this._currentTime = time;
-                this._lastTimeSync = Date.now();
-                this.events.trigger(this, 'timeupdate');
-            };
-            this.startTimeUpdateTimer = () => {
-                if (this._timeUpdateTimer) return;
-                this._lastTimerTick = Date.now();
-                this._timeUpdateTimer = setInterval(() => {
-                    if (this._paused || this._currentTime === null) return;
-                    const now = Date.now();
-                    const elapsed = now - this._lastTimerTick;
-                    this._lastTimerTick = now;
-                    const rate = this.getPlaybackRate() || 1.0;
-                    this._currentTime += elapsed * rate;
-                    this.events.trigger(this, 'timeupdate');
-                }, 250);
-            };
-            this.stopTimeUpdateTimer = () => {
-                if (this._timeUpdateTimer) {
-                    clearInterval(this._timeUpdateTimer);
-                    this._timeUpdateTimer = null;
-                }
-            };
-            this.onPlaying = () => {
+
+            // Set up video-specific event handlers
+            this._core.handlers.onPlaying = () => {
                 if (!this._started) {
                     this._started = true;
                     this.loading.hide();
@@ -87,26 +53,43 @@
                     }
                     window.api.player.setVideoRectangle(0, 0, 0, 0);
                 }
-                if (this._paused) {
-                    this._paused = false;
+                if (this._core._paused) {
+                    this._core._paused = false;
                     this.events.trigger(this, 'unpause');
                 }
-                this.startTimeUpdateTimer();
+                this._core.startTimeUpdateTimer();
                 this.events.trigger(this, 'playing');
                 console.log('[Media] [MPV] playing event triggered');
             };
-            this.onPause = () => {
-                this._paused = true;
-                this.stopTimeUpdateTimer();
+
+            this._core.handlers.onTimeUpdate = (time) => {
+                if (time && !this._timeUpdated) this._timeUpdated = true;
+                this._core._currentTime = time;
+                this._core._lastTimerTick = Date.now();
+                this.events.trigger(this, 'timeupdate');
+            };
+
+            this._core.handlers.onEnded = () => {
+                if (!this._endedPending) {
+                    this._endedPending = true;
+                    this.onEndedInternal();
+                }
+            };
+
+            this._core.handlers.onPause = () => {
+                this._core._paused = true;
+                this._core.stopTimeUpdateTimer();
                 this.events.trigger(this, 'pause');
             };
-            this.onError = (error) => {
+
+            this._core.handlers.onDuration = (duration) => {
+                this._core._duration = duration;
+            };
+
+            this._core.handlers.onError = (error) => {
                 this.removeMediaDialog();
                 console.error('[Media] media error:', error);
                 this.events.trigger(this, 'error', [{ type: 'mediadecodeerror' }]);
-            };
-            this.onDuration = (duration) => {
-                this._duration = duration;
             };
         }
 
@@ -116,7 +99,7 @@
             console.log('[Media] [MPV] play() called with options:', options);
             this._started = false;
             this._timeUpdated = false;
-            this._currentTime = null;
+            this._core._currentTime = null;
             this._endedPending = false;
             if (options.fullscreen) this.loading.show();
             await this.createMediaElement(options);
@@ -136,7 +119,7 @@
 
                 const ms = (options.playerStartPositionTicks || 0) / 10000;
                 this._currentPlayOptions = options;
-                this._currentTime = ms;
+                this._core._currentTime = ms;
 
                 const audioIdx = options.mediaSource.DefaultAudioStreamIndex ?? -1;
                 const subIdx = options.mediaSource.DefaultSubtitleStreamIndex ?? -1;
@@ -172,7 +155,7 @@
 
         onEndedInternal() {
             this.events.trigger(this, 'stopped', [{ src: this._currentSrc }]);
-            this._currentTime = null;
+            this._core._currentTime = null;
             this._currentSrc = null;
             this._currentPlayOptions = null;
         }
@@ -189,7 +172,7 @@
                 }
             }
             window.api.player.stop();
-            this.onEnded();
+            this._core.handlers.onEnded();
             if (destroyPlayer) this.destroy();
             return Promise.resolve();
         }
@@ -207,16 +190,9 @@
         }
 
         destroy() {
-            this.stopTimeUpdateTimer();
+            this._core.stopTimeUpdateTimer();
             this.removeMediaDialog();
-            const player = window.api.player;
-            this._hasConnection = false;
-            player.playing.disconnect(this.onPlaying);
-            player.positionUpdate.disconnect(this.onTimeUpdate);
-            player.finished.disconnect(this.onEnded);
-            player.updateDuration.disconnect(this.onDuration);
-            player.error.disconnect(this.onError);
-            player.paused.disconnect(this.onPause);
+            this._core.disconnectSignals();
         }
 
         createMediaElement(options) {
@@ -230,18 +206,9 @@
                 this.setTransparency(2);
                 this._videoDialog = dlg;
 
-                const player = window.api.player;
-                if (!this._hasConnection) {
-                    this._hasConnection = true;
-                    player.playing.connect(this.onPlaying);
-                    player.positionUpdate.connect(this.onTimeUpdate);
-                    player.finished.connect(this.onEnded);
-                    player.updateDuration.connect(this.onDuration);
-                    player.error.connect(this.onError);
-                    player.paused.connect(this.onPause);
-                    if (window.jmpNative) {
-                        window.jmpNative.notifyRateChange(this._playRate);
-                    }
+                this._core.connectSignals();
+                if (window.jmpNative) {
+                    window.jmpNative.notifyRateChange(this._core._playRate);
                 }
             } else {
                 this._videoDialog = dlg;
@@ -271,14 +238,24 @@
         isFullscreen() { return window._isFullscreen === true; }
         toggleFullscreen() { window.api?.input?.executeActions(['host:fullscreen']); }
 
-        currentTime(val) {
-            if (val != null) { window.api.player.seekTo(val); return; }
-            return this._currentTime;
+        // Delegate to core
+        currentTime(val) { return this._core.currentTime(val); }
+        currentTimeAsync() { return this._core.currentTimeAsync(); }
+        duration() { return this._core.duration(); }
+        seekable() { return this._core.seekable(); }
+        getBufferedRanges() { return this._core.getBufferedRanges(); }
+        pause() { this._core.pause(); }
+        resume() { this._core.resume(); }
+        unpause() { this._core.unpause(); }
+        paused() { return this._core.paused(); }
+
+        setPlaybackRate(value) {
+            this._core.setPlaybackRate(value);
+            if (window.jmpNative) window.jmpNative.notifyRateChange(value);
         }
-        currentTimeAsync() {
-            return new Promise(resolve => window.api.player.getPosition(resolve));
-        }
-        duration() { return this._duration || null; }
+        getPlaybackRate() { return this._core.getPlaybackRate(); }
+        getSupportedPlaybackRates() { return this._core.getSupportedPlaybackRates(); }
+
         canSetAudioStreamIndex() { return true; }
         setPictureInPictureEnabled() {}
         isPictureInPictureEnabled() { return false; }
@@ -286,43 +263,29 @@
         setAirPlayEnabled() {}
         setBrightness() {}
         getBrightness() { return 100; }
-        seekable() { return Boolean(this._duration); }
-        pause() { window.api.player.pause(); }
-        resume() { this._paused = false; window.api.player.play(); }
-        unpause() { window.api.player.play(); }
-        paused() { return this._paused; }
-
-        setPlaybackRate(value) {
-            this._playRate = +value;
-            window.api.player.setPlaybackRate(this._playRate * 1000);
-            if (window.jmpNative) window.jmpNative.notifyRateChange(this._playRate);
-        }
-        getPlaybackRate() { return this._playRate || 1; }
-        getSupportedPlaybackRates() {
-            return [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0].map(id => ({ name: id + 'x', id }));
-        }
 
         saveVolume(value) { if (value) this.appSettings.set('volume', value); }
         setVolume(val, save = true) {
             val = Number(val);
             if (!isNaN(val)) {
-                this._volume = val;
+                this._core._volume = val;
                 if (save) { this.saveVolume(val / 100); this.events.trigger(this, 'volumechange'); }
                 window.api.player.setVolume(val);
             }
         }
-        getVolume() { return this._volume; }
+        getVolume() { return this._core.getVolume(); }
         volumeUp() { this.setVolume(Math.min(this.getVolume() + 2, 100)); }
         volumeDown() { this.setVolume(Math.max(this.getVolume() - 2, 0)); }
+
         setMute(mute, triggerEvent = true) {
-            this._muted = mute;
+            this._core._muted = mute;
             window.api.player.setMuted(mute);
             if (triggerEvent) this.events.trigger(this, 'volumechange');
         }
-        isMuted() { return this._muted; }
+        isMuted() { return this._core.isMuted(); }
+
         togglePictureInPicture() {}
         toggleAirPlay() {}
-        getBufferedRanges() { return []; }
         getStats() { return Promise.resolve({ categories: [] }); }
         getSupportedAspectRatios() { return []; }
         getAspectRatio() { return 'normal'; }

@@ -4,6 +4,12 @@
     // Fullscreen state tracking
     window._isFullscreen = false;
 
+    // Buffered ranges storage (updated by native code)
+    window._bufferedRanges = [];
+    window._nativeUpdateBufferedRanges = function(ranges) {
+        window._bufferedRanges = ranges || [];
+    };
+
     // Signal emulation (Qt-style connect/disconnect)
     function createSignal(name) {
         const callbacks = [];

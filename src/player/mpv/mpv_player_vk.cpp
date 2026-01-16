@@ -76,6 +76,39 @@ void MpvPlayerVk::handleMpvEvent(mpv_event* event) {
             } else if (strcmp(prop->name, "core-idle") == 0 && prop->format == MPV_FORMAT_FLAG) {
                 bool idle = *static_cast<int*>(prop->data) != 0;
                 if (on_core_idle_) on_core_idle_(idle, last_position_ * 1000.0);
+            } else if (strcmp(prop->name, "demuxer-cache-state") == 0 && prop->format == MPV_FORMAT_NODE) {
+                if (on_buffered_ranges_) {
+                    std::vector<BufferedRange> ranges;
+                    mpv_node* node = static_cast<mpv_node*>(prop->data);
+                    if (node && node->format == MPV_FORMAT_NODE_MAP) {
+                        for (int i = 0; i < node->u.list->num; i++) {
+                            if (strcmp(node->u.list->keys[i], "seekable-ranges") == 0) {
+                                mpv_node* arr = &node->u.list->values[i];
+                                if (arr->format == MPV_FORMAT_NODE_ARRAY) {
+                                    for (int j = 0; j < arr->u.list->num; j++) {
+                                        mpv_node* range = &arr->u.list->values[j];
+                                        if (range->format == MPV_FORMAT_NODE_MAP) {
+                                            double start = 0, end = 0;
+                                            for (int k = 0; k < range->u.list->num; k++) {
+                                                if (strcmp(range->u.list->keys[k], "start") == 0 && range->u.list->values[k].format == MPV_FORMAT_DOUBLE)
+                                                    start = range->u.list->values[k].u.double_;
+                                                else if (strcmp(range->u.list->keys[k], "end") == 0 && range->u.list->values[k].format == MPV_FORMAT_DOUBLE)
+                                                    end = range->u.list->values[k].u.double_;
+                                            }
+                                            // Convert seconds to ticks (100ns units)
+                                            ranges.push_back({
+                                                static_cast<int64_t>(start * 10000000.0),
+                                                static_cast<int64_t>(end * 10000000.0)
+                                            });
+                                        }
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    on_buffered_ranges_(ranges);
+                }
             }
             break;
         }
@@ -155,6 +188,7 @@ bool MpvPlayerVk::init(VulkanContext* vk, VideoSurface* subsurface) {
     mpv_observe_property(mpv_, 0, "seeking", MPV_FORMAT_FLAG);
     mpv_observe_property(mpv_, 0, "paused-for-cache", MPV_FORMAT_FLAG);
     mpv_observe_property(mpv_, 0, "core-idle", MPV_FORMAT_FLAG);
+    mpv_observe_property(mpv_, 0, "demuxer-cache-state", MPV_FORMAT_NODE);
 
     // Wakeup callback for event-driven processing
     mpv_set_wakeup_callback(mpv_, onMpvWakeup, this);
@@ -284,6 +318,21 @@ void MpvPlayerVk::setMuted(bool muted) {
 void MpvPlayerVk::setSpeed(double speed) {
     if (!mpv_) return;
     mpv_set_property(mpv_, "speed", MPV_FORMAT_DOUBLE, &speed);
+}
+
+void MpvPlayerVk::setNormalizationGain(double gainDb) {
+    if (!mpv_) return;
+    if (gainDb == 0.0) {
+        // Clear audio filter
+        mpv_set_property_string(mpv_, "af", "");
+    } else {
+        // Apply gain via lavfi volume filter
+        // Format: lavfi=[volume=<dB>dB]
+        char filter[64];
+        snprintf(filter, sizeof(filter), "lavfi=[volume=%.2fdB]", gainDb);
+        mpv_set_property_string(mpv_, "af", filter);
+        std::cerr << "[mpv] Normalization gain: " << gainDb << " dB" << std::endl;
+    }
 }
 
 double MpvPlayerVk::getPosition() const {

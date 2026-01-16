@@ -11,6 +11,7 @@ using VideoSurface = WaylandSubsurface;
 #include <string>
 #include <functional>
 #include <atomic>
+#include <vector>
 
 struct mpv_handle;
 struct mpv_render_context;
@@ -26,6 +27,9 @@ public:
     using SeekCallback = std::function<void(double ms)>;  // seek completed with position
     using BufferingCallback = std::function<void(bool buffering, double ms)>;
     using CoreIdleCallback = std::function<void(bool idle, double ms)>;
+    // Buffered range in ticks (100ns units, matching jellyfin-web)
+    struct BufferedRange { int64_t start; int64_t end; };
+    using BufferedRangesCallback = std::function<void(const std::vector<BufferedRange>&)>;
 
     MpvPlayerVk();
     ~MpvPlayerVk();
@@ -51,6 +55,7 @@ public:
     void setVolume(int volume);
     void setMuted(bool muted);
     void setSpeed(double speed);
+    void setNormalizationGain(double gainDb);  // ReplayGain/normalization in dB
 
     // State queries
     double getPosition() const;
@@ -73,6 +78,7 @@ public:
     void setSeekedCallback(SeekCallback cb) { on_seeked_ = cb; }
     void setBufferingCallback(BufferingCallback cb) { on_buffering_ = cb; }
     void setCoreIdleCallback(CoreIdleCallback cb) { on_core_idle_ = cb; }
+    void setBufferedRangesCallback(BufferedRangesCallback cb) { on_buffered_ranges_ = cb; }
 
     bool isHdr() const { return subsurface_ && subsurface_->isHdr(); }
     VideoSurface* subsurface() const { return subsurface_; }
@@ -97,6 +103,7 @@ private:
     SeekCallback on_seeked_;
     BufferingCallback on_buffering_;
     CoreIdleCallback on_core_idle_;
+    BufferedRangesCallback on_buffered_ranges_;
 
     std::atomic<bool> needs_redraw_{false};
     std::atomic<bool> has_events_{false};

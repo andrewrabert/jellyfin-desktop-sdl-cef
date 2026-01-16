@@ -137,6 +137,24 @@ int64_t jsonGetInt(const std::string& json, const std::string& key) {
     return num.empty() ? 0 : std::stoll(num);
 }
 
+// Extract double from JSON (with optional hasValue output)
+double jsonGetDouble(const std::string& json, const std::string& key, bool* hasValue = nullptr) {
+    std::string search = "\"" + key + "\":";
+    size_t pos = json.find(search);
+    if (pos == std::string::npos) {
+        if (hasValue) *hasValue = false;
+        return 0.0;
+    }
+    pos += search.length();
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
+    std::string num;
+    while (pos < json.size() && (isdigit(json[pos]) || json[pos] == '-' || json[pos] == '.' || json[pos] == 'e' || json[pos] == 'E' || json[pos] == '+')) {
+        num += json[pos++];
+    }
+    if (hasValue) *hasValue = !num.empty();
+    return num.empty() ? 0.0 : std::stod(num);
+}
+
 // Extract first element from JSON array of strings
 std::string jsonGetFirstArrayString(const std::string& json, const std::string& key) {
     std::string search = "\"" + key + "\":";
@@ -696,6 +714,17 @@ int main(int argc, char* argv[]) {
             mediaSession.setRate(current_playback_rate);
         }
     });
+    mpv.setBufferedRangesCallback([&](const std::vector<MpvPlayerVk::BufferedRange>& ranges) {
+        // Send buffered ranges to JS as JSON array
+        std::string json = "[";
+        for (size_t i = 0; i < ranges.size(); i++) {
+            if (i > 0) json += ",";
+            json += "{\"start\":" + std::to_string(ranges[i].start) +
+                    ",\"end\":" + std::to_string(ranges[i].end) + "}";
+        }
+        json += "]";
+        client->executeJS("if(window._nativeUpdateBufferedRanges)window._nativeUpdateBufferedRanges(" + json + ");");
+    });
     mpv.setCoreIdleCallback([&](bool idle, double ms) {
         (void)idle;
         mediaSession.setPosition(static_cast<int64_t>(ms * 1000.0));
@@ -981,6 +1010,12 @@ int main(int argc, char* argv[]) {
                         MediaMetadata meta = parseMetadataJson(cmd.metadata);
                         std::cerr << "[MAIN] metadata: title=" << meta.title << " artist=" << meta.artist << std::endl;
                         mediaSession.setMetadata(meta);
+                        // Apply normalization gain (ReplayGain) if present
+                        bool hasGain = false;
+                        double normGain = jsonGetDouble(cmd.metadata, "NormalizationGain", &hasGain);
+                        mpv.setNormalizationGain(hasGain ? normGain : 0.0);
+                    } else {
+                        mpv.setNormalizationGain(0.0);  // Clear any previous gain
                     }
                     if (mpv.loadFile(cmd.url, startSec)) {
                         has_video = true;

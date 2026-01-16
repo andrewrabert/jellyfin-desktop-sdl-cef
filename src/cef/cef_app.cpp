@@ -119,6 +119,7 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
     frame->ExecuteJavaScript(shim_str, frame->GetURL(), 0);
 
     // Inject the player plugins
+    frame->ExecuteJavaScript(embedded_js.at("mpv-player-core.js"), frame->GetURL(), 0);
     frame->ExecuteJavaScript(embedded_js.at("mpv-video-player.js"), frame->GetURL(), 0);
     frame->ExecuteJavaScript(embedded_js.at("mpv-audio-player.js"), frame->GetURL(), 0);
     frame->ExecuteJavaScript(embedded_js.at("input-plugin.js"), frame->GetURL(), 0);

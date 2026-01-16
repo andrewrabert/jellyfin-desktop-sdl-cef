@@ -4,7 +4,7 @@
     function fade(instance, startingVolume) {
         instance._isFadingOut = true;
         const newVolume = Math.max(0, startingVolume - 15);
-        window.api.player.setVolume(newVolume);
+        instance._core.setVolume(newVolume, false);
 
         if (newVolume <= 0) {
             instance._isFadingOut = false;
@@ -38,75 +38,54 @@
             this.syncPlayWrapAs = 'htmlaudioplayer';
             this.useServerPlaybackInfoForAudio = true;
 
-            this._duration = undefined;
-            this._currentTime = null;
-            this._paused = false;
-            this._volume = this.getSavedVolume() * 100;
-            this._playRate = 1;
-            this._hasConnection = false;
-            this._muted = false;
-            this._timeUpdateTimer = null;
-            this._lastTimerTick = null;
+            this._core = new window.MpvPlayerCore(events);
+            this._core.player = this;
+            this._core._volume = this.getSavedVolume() * 100;
 
-            this.startTimeUpdateTimer = () => {
-                if (this._timeUpdateTimer) return;
-                this._lastTimerTick = Date.now();
-                this._timeUpdateTimer = setInterval(() => {
-                    if (this._paused || this._currentTime === null) return;
-                    const now = Date.now();
-                    const elapsed = now - this._lastTimerTick;
-                    this._lastTimerTick = now;
-                    const rate = this.getPlaybackRate() || 1.0;
-                    this._currentTime += elapsed * rate;
-                    this.events.trigger(this, 'timeupdate');
-                }, 250);
-            };
+            this._currentSrc = null;
+            this._currentPlayOptions = null;
+            this._started = false;
+            this._isFadingOut = false;
 
-            this.stopTimeUpdateTimer = () => {
-                if (this._timeUpdateTimer) {
-                    clearInterval(this._timeUpdateTimer);
-                    this._timeUpdateTimer = null;
-                }
-            };
-
-            this.onPlaying = () => {
+            // Set up event handlers
+            this._core.handlers.onPlaying = () => {
                 if (!this._started) {
                     this._started = true;
                     const volume = this.getSavedVolume() * 100;
-                    this.setVolume(volume, volume !== this._volume);
+                    this.setVolume(volume, volume !== this._core._volume);
                 }
                 this.setPlaybackRate(this.getPlaybackRate());
-                if (this._paused) {
-                    this._paused = false;
+                if (this._core._paused) {
+                    this._core._paused = false;
                     this.events.trigger(this, 'unpause');
                 }
-                this.startTimeUpdateTimer();
+                this._core.startTimeUpdateTimer();
                 this.events.trigger(this, 'playing');
             };
 
-            this.onTimeUpdate = (time) => {
+            this._core.handlers.onTimeUpdate = (time) => {
                 if (!this._isFadingOut) {
-                    this._currentTime = time;
-                    this._lastTimerTick = Date.now();
+                    this._core._currentTime = time;
+                    this._core._lastTimerTick = Date.now();
                     this.events.trigger(this, 'timeupdate');
                 }
             };
 
-            this.onEnded = () => {
+            this._core.handlers.onEnded = () => {
                 this.onEndedInternal();
             };
 
-            this.onPause = () => {
-                this._paused = true;
-                this.stopTimeUpdateTimer();
+            this._core.handlers.onPause = () => {
+                this._core._paused = true;
+                this._core.stopTimeUpdateTimer();
                 this.events.trigger(this, 'pause');
             };
 
-            this.onDuration = (duration) => {
-                this._duration = duration;
+            this._core.handlers.onDuration = (duration) => {
+                this._core._duration = duration;
             };
 
-            this.onError = (error) => {
+            this._core.handlers.onError = (error) => {
                 console.error('[Media] [Audio] media error:', error);
                 this.events.trigger(this, 'error', [{ type: 'mediadecodeerror' }]);
             };
@@ -114,20 +93,9 @@
 
         play(options) {
             this._started = false;
-            this._currentTime = null;
-            this._duration = undefined;
-
-            const player = window.api.player;
-            if (!this._hasConnection) {
-                this._hasConnection = true;
-                player.playing.connect(this.onPlaying);
-                player.positionUpdate.connect(this.onTimeUpdate);
-                player.finished.connect(this.onEnded);
-                player.updateDuration.connect(this.onDuration);
-                player.error.connect(this.onError);
-                player.paused.connect(this.onPause);
-            }
-
+            this._core._currentTime = null;
+            this._core._duration = undefined;
+            this._core.connectSignals();
             return this.setCurrentSrc(options);
         }
 
@@ -139,7 +107,7 @@
 
                 const ms = (options.playerStartPositionTicks || 0) / 10000;
                 this._currentPlayOptions = options;
-                this._currentTime = ms;
+                this._core._currentTime = ms;
 
                 window.api.player.load(val,
                     { startMilliseconds: ms, autoplay: true },
@@ -151,9 +119,9 @@
         }
 
         onEndedInternal() {
-            this.stopTimeUpdateTimer();
+            this._core.stopTimeUpdateTimer();
             this.events.trigger(this, 'stopped', [{ src: this._currentSrc }]);
-            this._currentTime = null;
+            this._core._currentTime = null;
             this._currentSrc = null;
             this._currentPlayOptions = null;
         }
@@ -169,8 +137,8 @@
                     return Promise.resolve();
                 }
 
-                const originalVolume = this._volume;
-                return fade(this, this._volume).then(() => {
+                const originalVolume = this._core._volume;
+                return fade(this, this._core._volume).then(() => {
                     this.pause();
                     this.setVolume(originalVolume, false);
                     this.onEndedInternal();
@@ -181,26 +149,17 @@
         }
 
         destroy() {
-            this.stopTimeUpdateTimer();
+            this._core.stopTimeUpdateTimer();
             window.api.player.stop();
-            const player = window.api.player;
-            this._hasConnection = false;
-            player.playing.disconnect(this.onPlaying);
-            player.positionUpdate.disconnect(this.onTimeUpdate);
-            player.finished.disconnect(this.onEnded);
-            player.updateDuration.disconnect(this.onDuration);
-            player.error.disconnect(this.onError);
-            player.paused.disconnect(this.onPause);
-            this._duration = undefined;
+            this._core.disconnectSignals();
+            this._core._duration = undefined;
         }
 
         getSavedVolume() {
             return this.appSettings ? this.appSettings.get('volume') || 1 : 1;
         }
 
-        currentSrc() {
-            return this._currentSrc;
-        }
+        currentSrc() { return this._currentSrc; }
 
         canPlayMediaType(mediaType) {
             return (mediaType || '').toLowerCase() === 'audio';
@@ -213,63 +172,20 @@
             return Promise.resolve({});
         }
 
-        currentTime(val) {
-            if (val != null) {
-                this._currentTime = val;
-                this._lastTimerTick = Date.now();
-                window.api.player.seekTo(val);
-                return;
-            }
-            return this._currentTime;
-        }
+        // Delegate to core
+        currentTime(val) { return this._core.currentTime(val); }
+        currentTimeAsync() { return this._core.currentTimeAsync(); }
+        duration() { return this._core.duration(); }
+        seekable() { return this._core.seekable(); }
+        getBufferedRanges() { return this._core.getBufferedRanges(); }
+        pause() { this._core.pause(); }
+        resume() { this._core.resume(); }
+        unpause() { this._core.unpause(); }
+        paused() { return this._core.paused(); }
 
-        currentTimeAsync() {
-            return new Promise((resolve) => {
-                window.api.player.getPosition(resolve);
-            });
-        }
-
-        duration() {
-            return this._duration || null;
-        }
-
-        seekable() {
-            return Boolean(this._duration);
-        }
-
-        getBufferedRanges() {
-            return [];
-        }
-
-        pause() {
-            window.api.player.pause();
-        }
-
-        resume() {
-            this._paused = false;
-            window.api.player.play();
-        }
-
-        unpause() {
-            window.api.player.play();
-        }
-
-        paused() {
-            return this._paused;
-        }
-
-        setPlaybackRate(value) {
-            this._playRate = value;
-            window.api.player.setPlaybackRate(value * 1000);
-        }
-
-        getPlaybackRate() {
-            return this._playRate;
-        }
-
-        getSupportedPlaybackRates() {
-            return [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0].map(id => ({ name: id + 'x', id }));
-        }
+        setPlaybackRate(value) { this._core.setPlaybackRate(value); }
+        getPlaybackRate() { return this._core.getPlaybackRate(); }
+        getSupportedPlaybackRates() { return this._core.getSupportedPlaybackRates(); }
 
         saveVolume(value) {
             if (value && this.appSettings) {
@@ -278,7 +194,7 @@
         }
 
         setVolume(val, save = true) {
-            this._volume = val;
+            this._core._volume = val;
             if (save) {
                 this.saveVolume((val || 100) / 100);
                 this.events.trigger(this, 'volumechange');
@@ -286,29 +202,17 @@
             window.api.player.setVolume(val);
         }
 
-        getVolume() {
-            return this._volume;
-        }
-
-        volumeUp() {
-            this.setVolume(Math.min(this.getVolume() + 2, 100));
-        }
-
-        volumeDown() {
-            this.setVolume(Math.max(this.getVolume() - 2, 0));
-        }
+        getVolume() { return this._core.getVolume(); }
+        volumeUp() { this.setVolume(Math.min(this.getVolume() + 2, 100)); }
+        volumeDown() { this.setVolume(Math.max(this.getVolume() - 2, 0)); }
 
         setMute(mute, triggerEvent = true) {
-            this._muted = mute;
+            this._core._muted = mute;
             window.api.player.setMuted(mute);
-            if (triggerEvent) {
-                this.events.trigger(this, 'volumechange');
-            }
+            if (triggerEvent) this.events.trigger(this, 'volumechange');
         }
 
-        isMuted() {
-            return this._muted;
-        }
+        isMuted() { return this._core.isMuted(); }
 
         supports(feature) {
             return ['PlaybackRate'].includes(feature);

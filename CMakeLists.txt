@@ -156,6 +156,7 @@ set(MPV_LIBRARIES "${MPV_LIBRARY}")
 # Embed JS shims into generated header
 set(JS_SHIMS
     ${CMAKE_SOURCE_DIR}/src/web/native-shim.js
+    ${CMAKE_SOURCE_DIR}/src/web/mpv-player-core.js
     ${CMAKE_SOURCE_DIR}/src/web/mpv-video-player.js
     ${CMAKE_SOURCE_DIR}/src/web/mpv-audio-player.js
     ${CMAKE_SOURCE_DIR}/src/web/input-plugin.js
