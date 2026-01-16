@@ -4,11 +4,10 @@
 #include <algorithm>
 #include <cstring>
 
-// Device extensions needed for mpv/libplacebo (same as old jellyfin-desktop)
-static const char* s_deviceExtensions[] = {
+// Required device extensions for mpv/libplacebo
+static const char* s_requiredDeviceExtensions[] = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME,
     VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME,
-    VK_EXT_HDR_METADATA_EXTENSION_NAME,
     VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
     VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
     VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME,
@@ -19,7 +18,11 @@ static const char* s_deviceExtensions[] = {
     VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,
     VK_KHR_MAINTENANCE_1_EXTENSION_NAME,
 };
-static const int s_deviceExtensionCount = sizeof(s_deviceExtensions) / sizeof(s_deviceExtensions[0]);
+
+// Optional extensions (HDR support)
+static const char* s_optionalDeviceExtensions[] = {
+    VK_EXT_HDR_METADATA_EXTENSION_NAME,
+};
 
 // Image description listener callbacks
 struct ImageDescContext {
@@ -180,6 +183,44 @@ bool WaylandSubsurface::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
     vkEnumeratePhysicalDevices(instance_, &gpuCount, gpus.data());
     physical_device_ = gpus[0];
 
+    // Print selected GPU
+    VkPhysicalDeviceProperties gpuProps;
+    vkGetPhysicalDeviceProperties(physical_device_, &gpuProps);
+    std::cerr << "WaylandSubsurface using GPU: " << gpuProps.deviceName << std::endl;
+
+    // Get available extensions
+    uint32_t extCount = 0;
+    vkEnumerateDeviceExtensionProperties(physical_device_, nullptr, &extCount, nullptr);
+    std::vector<VkExtensionProperties> availableExts(extCount);
+    vkEnumerateDeviceExtensionProperties(physical_device_, nullptr, &extCount, availableExts.data());
+
+    auto hasExtension = [&](const char* name) {
+        for (const auto& ext : availableExts) {
+            if (strcmp(ext.extensionName, name) == 0) return true;
+        }
+        return false;
+    };
+
+    // Build extension list: required + available optional
+    std::vector<const char*> enabledExtensions;
+    constexpr int requiredCount = sizeof(s_requiredDeviceExtensions) / sizeof(s_requiredDeviceExtensions[0]);
+    constexpr int optionalCount = sizeof(s_optionalDeviceExtensions) / sizeof(s_optionalDeviceExtensions[0]);
+
+    for (int i = 0; i < requiredCount; i++) {
+        if (!hasExtension(s_requiredDeviceExtensions[i])) {
+            std::cerr << "Missing required extension: " << s_requiredDeviceExtensions[i] << std::endl;
+            return false;
+        }
+        enabledExtensions.push_back(s_requiredDeviceExtensions[i]);
+    }
+
+    for (int i = 0; i < optionalCount; i++) {
+        if (hasExtension(s_optionalDeviceExtensions[i])) {
+            enabledExtensions.push_back(s_optionalDeviceExtensions[i]);
+            std::cerr << "Enabled optional extension: " << s_optionalDeviceExtensions[i] << std::endl;
+        }
+    }
+
     // Find graphics queue family
     uint32_t queueFamilyCount = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &queueFamilyCount, nullptr);
@@ -220,11 +261,12 @@ bool WaylandSubsurface::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
     deviceInfo.pNext = &features2_;
     deviceInfo.queueCreateInfoCount = 1;
     deviceInfo.pQueueCreateInfos = &queueInfo;
-    deviceInfo.enabledExtensionCount = s_deviceExtensionCount;
-    deviceInfo.ppEnabledExtensionNames = s_deviceExtensions;
+    deviceInfo.enabledExtensionCount = static_cast<uint32_t>(enabledExtensions.size());
+    deviceInfo.ppEnabledExtensionNames = enabledExtensions.data();
 
-    if (vkCreateDevice(physical_device_, &deviceInfo, nullptr, &device_) != VK_SUCCESS) {
-        std::cerr << "Failed to create Vulkan device" << std::endl;
+    VkResult deviceResult = vkCreateDevice(physical_device_, &deviceInfo, nullptr, &device_);
+    if (deviceResult != VK_SUCCESS) {
+        std::cerr << "Failed to create Vulkan device: VkResult=" << deviceResult << std::endl;
         return false;
     }
 
@@ -554,9 +596,9 @@ uint32_t WaylandSubsurface::vkQueueFamily() const {
 }
 
 const char* const* WaylandSubsurface::deviceExtensions() const {
-    return s_deviceExtensions;
+    return s_requiredDeviceExtensions;
 }
 
 int WaylandSubsurface::deviceExtensionCount() const {
-    return s_deviceExtensionCount;
+    return sizeof(s_requiredDeviceExtensions) / sizeof(s_requiredDeviceExtensions[0]);
 }

@@ -81,7 +81,8 @@ uniform sampler2D overlayTex;
 uniform float alpha;
 void main() {
     vec4 color = texture(overlayTex, texCoord);
-    fragColor = color * alpha;
+    // CEF provides BGRA, uploaded as RGBA - swizzle back
+    fragColor = color.bgra * alpha;
 }
 )";
 #endif
@@ -136,7 +137,13 @@ bool OpenGLCompositor::createTexture() {
     }
 
     // Software path: allocate texture storage and PBOs
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width_, height_, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, nullptr);
+    // Use GL_RGBA (universally supported) - shader swizzles BGRA->RGBA
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width_, height_, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    GLenum texErr = glGetError();
+    if (texErr != GL_NO_ERROR) {
+        std::cerr << "[GLCompositor] glTexImage2D failed: " << texErr << std::endl;
+        return false;
+    }
 #endif
 
     // Create double-buffered PBOs for async upload
@@ -148,6 +155,12 @@ bool OpenGLCompositor::createTexture() {
     }
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 
+    GLenum pboErr = glGetError();
+    if (pboErr != GL_NO_ERROR) {
+        std::cerr << "[GLCompositor] PBO creation failed: " << pboErr << std::endl;
+        return false;
+    }
+
     // Map the first PBO for writing
     current_pbo_ = 0;
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbos_[current_pbo_]);
@@ -157,7 +170,7 @@ bool OpenGLCompositor::createTexture() {
 
     GLenum err = glGetError();
     if (err != GL_NO_ERROR) {
-        std::cerr << "[GLCompositor] Failed to create texture/PBOs: " << err << std::endl;
+        std::cerr << "[GLCompositor] glMapBufferRange failed: " << err << std::endl;
         return false;
     }
 
@@ -312,7 +325,8 @@ bool OpenGLCompositor::flushOverlay() {
 
     glBindTexture(GL_TEXTURE_2D, texture_);
     // With PBO bound, last arg is offset into PBO, not pointer
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width_, height_, GL_BGRA_EXT, GL_UNSIGNED_BYTE, nullptr);
+    // Upload as RGBA - shader swizzles BGRA->RGBA
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width_, height_, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
 
     // Swap to next PBO and map it for next frame's writes
     current_pbo_ = 1 - current_pbo_;
