@@ -18,7 +18,8 @@
       "Edit(dev/**)",
       "Write(dev/**)",
       "Edit(*)",
-      "Write(*)"
+      "Write(*)",
+      "WebSearch"
     ]
   }
 }
