@@ -3,7 +3,7 @@
 ## Quick Start
 
 ```sh
-git clone https://github.com/andrewrabert/jellyfin-desktop-cef
+git clone https://github.com/jellyfin-labs/jellyfin-desktop-cef
 cd jellyfin-desktop-cef
 git submodule update --init --recursive
 python3 dev/download_cef.py
