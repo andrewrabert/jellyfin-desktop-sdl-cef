@@ -96,7 +96,6 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
     jmpNative->SetValue("playerSetMuted", CefV8Value::CreateFunction("playerSetMuted", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("playerSetSpeed", CefV8Value::CreateFunction("playerSetSpeed", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("saveServerUrl", CefV8Value::CreateFunction("saveServerUrl", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
-    jmpNative->SetValue("setFullscreen", CefV8Value::CreateFunction("setFullscreen", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("loadServer", CefV8Value::CreateFunction("loadServer", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("checkServerConnectivity", CefV8Value::CreateFunction("checkServerConnectivity", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("notifyMetadata", CefV8Value::CreateFunction("notifyMetadata", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
@@ -333,15 +332,6 @@ bool NativeV8Handler::Execute(const CefString& name,
             msg->GetArgumentList()->SetString(0, url);
             browser_->GetMainFrame()->SendProcessMessage(PID_BROWSER, msg);
         }
-        return true;
-    }
-
-    if (name == "setFullscreen") {
-        bool enable = arguments.size() >= 1 && arguments[0]->IsBool() ? arguments[0]->GetBoolValue() : true;
-        std::cerr << "[V8] setFullscreen: " << enable << std::endl;
-        CefRefPtr<CefProcessMessage> msg = CefProcessMessage::Create("setFullscreen");
-        msg->GetArgumentList()->SetBool(0, enable);
-        browser_->GetMainFrame()->SendProcessMessage(PID_BROWSER, msg);
         return true;
     }
 

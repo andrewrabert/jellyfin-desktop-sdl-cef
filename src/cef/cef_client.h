@@ -36,6 +36,9 @@ using PlayerMessageCallback = std::function<void(const std::string& cmd, const s
 // Cursor change callback (passes CEF cursor type)
 using CursorChangeCallback = std::function<void(cef_cursor_type_t type)>;
 
+// Fullscreen mode change callback (web content requested fullscreen)
+using FullscreenChangeCallback = std::function<void(bool fullscreen)>;
+
 #ifdef __APPLE__
 // macOS: IOSurface callback
 using IOSurfacePaintCallback = std::function<void(IOSurfaceRef surface, int width, int height)>;
@@ -66,11 +69,13 @@ public:
 #ifdef __APPLE__
     Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg = nullptr,
            IOSurfacePaintCallback on_iosurface_paint = nullptr, MenuOverlay* menu = nullptr,
-           CursorChangeCallback on_cursor_change = nullptr);
+           CursorChangeCallback on_cursor_change = nullptr,
+           FullscreenChangeCallback on_fullscreen_change = nullptr);
 #else
     Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg = nullptr,
            AcceleratedPaintCallback on_accel_paint = nullptr, MenuOverlay* menu = nullptr,
-           CursorChangeCallback on_cursor_change = nullptr);
+           CursorChangeCallback on_cursor_change = nullptr,
+           FullscreenChangeCallback on_fullscreen_change = nullptr);
 #endif
 
     // CefClient
@@ -94,6 +99,8 @@ public:
                         CefCursorHandle cursor,
                         cef_cursor_type_t type,
                         const CefCursorInfo& custom_cursor_info) override;
+    void OnFullscreenModeChange(CefRefPtr<CefBrowser> browser,
+                                bool fullscreen) override;
 
     // CefRenderHandler
     void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override;
@@ -138,6 +145,9 @@ public:
     // Execute JavaScript in the browser
     void executeJS(const std::string& code);
 
+    // Exit browser fullscreen mode (call when window exits fullscreen)
+    void exitFullscreen();
+
     // Player signal helpers
     void emitPlaying();
     void emitPaused();
@@ -160,6 +170,7 @@ private:
 #endif
     MenuOverlay* menu_ = nullptr;
     CursorChangeCallback on_cursor_change_;
+    FullscreenChangeCallback on_fullscreen_change_;
     std::atomic<bool> is_closed_ = false;
     CefRefPtr<CefBrowser> browser_;
 

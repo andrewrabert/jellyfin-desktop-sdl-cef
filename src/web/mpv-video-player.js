@@ -26,6 +26,9 @@
             this.isLocalPlayer = true;
             this.isFetching = false;
 
+            // Register for fullscreen notifications
+            window._mpvVideoPlayerInstance = this;
+
             // Use defineProperty to avoid circular reference in JSON.stringify
             Object.defineProperty(this, '_core', {
                 value: new window.MpvPlayerCore(events),
@@ -52,6 +55,7 @@
                         const poster = dlg.querySelector('.mpvPoster');
                         if (poster) poster.remove();
                     }
+                    // "fullscreen" = fills entire web content area, not the actual screen
                     if (this._currentPlayOptions?.fullscreen) {
                         this.appRouter.showVideoOsd();
                         if (dlg) dlg.style.zIndex = 'unset';
@@ -106,7 +110,7 @@
             this._timeUpdated = false;
             this._core._currentTime = null;
             this._endedPending = false;
-            if (options.fullscreen) this.loading.show();
+            if (options.fullscreen) this.loading.show();  // fills entire web content area, not the actual screen
             await this.createMediaElement(options);
             console.log('[Media] [MPV] createMediaElement done, calling setCurrentSrc');
             return await this.setCurrentSrc(options);
@@ -206,7 +210,7 @@
                 dlg = document.createElement('div');
                 dlg.classList.add('videoPlayerContainer');
                 dlg.style.cssText = 'position:fixed;top:0;bottom:0;left:0;right:0;display:flex;align-items:center;background:transparent;';
-                if (options.fullscreen) dlg.style.zIndex = 1000;
+                if (options.fullscreen) dlg.style.zIndex = 1000;  // fills entire web content area, not the actual screen
                 document.body.insertBefore(dlg, document.body.firstChild);
                 this.setTransparency(2);
                 this._videoDialog = dlg;
@@ -226,7 +230,7 @@
                 poster.style.cssText = `position:absolute;top:0;left:0;right:0;bottom:0;background:#000 url('${options.backdropUrl}') center/cover no-repeat;`;
                 dlg.appendChild(poster);
             }
-            if (options.fullscreen) document.body.classList.add('hide-scroll');
+            if (options.fullscreen) document.body.classList.add('hide-scroll');  // fills entire web content area, not the actual screen
             return Promise.resolve();
         }
 
@@ -241,7 +245,13 @@
         static getSupportedFeatures() { return ['PlaybackRate', 'SetAspectRatio']; }
         supports(feature) { return mpvVideoPlayer.getSupportedFeatures().includes(feature); }
         isFullscreen() { return window._isFullscreen === true; }
-        toggleFullscreen() { window.api?.input?.executeActions(['host:fullscreen']); }
+        toggleFullscreen() {
+            if (window._isFullscreen) {
+                document.exitFullscreen().catch(() => {});
+            } else {
+                document.documentElement.requestFullscreen().catch(() => {});
+            }
+        }
 
         // Delegate to core
         currentTime(val) { return this._core.currentTime(val); }

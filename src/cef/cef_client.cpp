@@ -69,17 +69,19 @@ private:
 #ifdef __APPLE__
 Client::Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg,
                IOSurfacePaintCallback on_iosurface_paint, MenuOverlay* menu,
-               CursorChangeCallback on_cursor_change)
+               CursorChangeCallback on_cursor_change, FullscreenChangeCallback on_fullscreen_change)
     : width_(width), height_(height), on_paint_(std::move(on_paint)),
       on_player_msg_(std::move(on_player_msg)), on_iosurface_paint_(std::move(on_iosurface_paint)),
-      menu_(menu), on_cursor_change_(std::move(on_cursor_change)) {}
+      menu_(menu), on_cursor_change_(std::move(on_cursor_change)),
+      on_fullscreen_change_(std::move(on_fullscreen_change)) {}
 #else
 Client::Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg,
                AcceleratedPaintCallback on_accel_paint, MenuOverlay* menu,
-               CursorChangeCallback on_cursor_change)
+               CursorChangeCallback on_cursor_change, FullscreenChangeCallback on_fullscreen_change)
     : width_(width), height_(height), on_paint_(std::move(on_paint)),
       on_player_msg_(std::move(on_player_msg)), on_accel_paint_(std::move(on_accel_paint)),
-      menu_(menu), on_cursor_change_(std::move(on_cursor_change)) {}
+      menu_(menu), on_cursor_change_(std::move(on_cursor_change)),
+      on_fullscreen_change_(std::move(on_fullscreen_change)) {}
 #endif
 
 bool Client::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
@@ -107,6 +109,13 @@ bool Client::OnCursorChange(CefRefPtr<CefBrowser> browser,
         on_cursor_change_(type);
     }
     return true;  // We handled it
+}
+
+void Client::OnFullscreenModeChange(CefRefPtr<CefBrowser> browser, bool fullscreen) {
+    std::cerr << "[CEF] OnFullscreenModeChange: " << (fullscreen ? "enter" : "exit") << std::endl;
+    if (on_fullscreen_change_) {
+        on_fullscreen_change_(fullscreen);
+    }
 }
 
 bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
@@ -156,10 +165,6 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
         std::cerr << "[IPC] Saving server URL: " << url << std::endl;
         Settings::instance().setServerUrl(url);
         Settings::instance().save();
-        return true;
-    } else if (name == "setFullscreen") {
-        bool enable = args->GetBool(0);
-        on_player_msg_("fullscreen", "", enable ? 1 : 0, "");
         return true;
     } else if (name == "notifyMetadata") {
         std::string metadata = args->GetString(0).ToString();
@@ -523,6 +528,11 @@ void Client::executeJS(const std::string& code) {
     if (frame) {
         frame->ExecuteJavaScript(code, frame->GetURL(), 0);
     }
+}
+
+void Client::exitFullscreen() {
+    if (!browser_) return;
+    browser_->GetHost()->ExitFullscreen(true);
 }
 
 void Client::emitPlaying() {

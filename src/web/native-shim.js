@@ -1,8 +1,20 @@
 (function() {
     console.log('[Media] Installing native shim...');
 
-    // Fullscreen state tracking
+    // Fullscreen state tracking via HTML5 Fullscreen API
     window._isFullscreen = false;
+
+    document.addEventListener('fullscreenchange', () => {
+        const fullscreen = !!document.fullscreenElement;
+        if (window._isFullscreen === fullscreen) return;
+        window._isFullscreen = fullscreen;
+        console.log('[Media] Fullscreen changed:', fullscreen);
+        // Notify player so UI updates (jellyfin-web listens for this)
+        const player = window._mpvVideoPlayerInstance;
+        if (player && player.events) {
+            player.events.trigger(player, 'fullscreenchange');
+        }
+    });
 
     // Buffered ranges storage (updated by native code)
     window._bufferedRanges = [];
@@ -174,8 +186,6 @@
                 if (callback) callback(playerState.duration);
                 return playerState.duration;
             },
-            notifyFullscreenChange(fs) {},
-            notifyRateChange(rate) {}
         },
         system: {
             openExternalUrl(url) {
@@ -204,16 +214,7 @@
             rateChanged: createSignal('rateChanged'),
             volumeChanged: createSignal('volumeChanged'),
 
-            executeActions(actions) {
-                console.log('[Media] executeActions:', actions);
-                for (const action of actions) {
-                    if (action === 'host:fullscreen') {
-                        const newState = !window._isFullscreen;
-                        window._isFullscreen = newState;
-                        if (window.jmpNative) window.jmpNative.setFullscreen(newState);
-                    }
-                }
-            }
+            executeActions() {}
         },
         window: {
             setCursorVisibility(visible) {}

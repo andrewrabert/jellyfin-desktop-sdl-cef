@@ -556,6 +556,9 @@ int main(int argc, char* argv[]) {
         }
     ));
 
+    // Track browser fullscreen requests for SDL
+    std::atomic<int> pending_fullscreen{-1};  // -1=none, 0=exit, 1=enter
+
     CefRefPtr<Client> client(new Client(width, height,
         [&](const void* buffer, int w, int h) {
             // Copy directly to compositor staging buffer (single memcpy)
@@ -599,6 +602,10 @@ int main(int argc, char* argv[]) {
             }
             current_cursor = SDL_CreateSystemCursor(sdl_type);
             SDL_SetCursor(current_cursor);
+        },
+        [&](bool fullscreen) {
+            // Web content requested fullscreen change via JS Fullscreen API
+            pending_fullscreen.store(fullscreen ? 1 : 0);
         }
     ));
 
@@ -847,10 +854,13 @@ int main(int argc, char* argv[]) {
             // Window events handled separately
             if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED) {
                 window_state.notifyFocusGained();
-                // Sync fullscreen state on focus gain (WM may have changed it)
+                // Sync browser fullscreen with SDL state on focus gain (WM may have changed it)
                 bool isFs = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0;
-                std::string fsJs = "if(window._nativeFullscreenChanged) window._nativeFullscreenChanged(" + std::string(isFs ? "true" : "false") + ");";
-                client->executeJS(fsJs);
+                if (isFs) {
+                    client->executeJS("document.documentElement.requestFullscreen().catch(()=>{});");
+                } else {
+                    client->exitFullscreen();
+                }
             } else if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
                 window_state.notifyFocusLost();
             } else if (event.type == SDL_EVENT_WINDOW_MINIMIZED) {
@@ -864,11 +874,11 @@ int main(int argc, char* argv[]) {
                 window_activated = true;
 #endif
             } else if (event.type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN) {
-                std::string js = "if(window._nativeFullscreenChanged) window._nativeFullscreenChanged(true);";
-                client->executeJS(js);
+                // Sync browser fullscreen with window fullscreen so exitFullscreen() works
+                client->executeJS("document.documentElement.requestFullscreen().catch(()=>{});");
             } else if (event.type == SDL_EVENT_WINDOW_LEAVE_FULLSCREEN) {
-                std::string js = "if(window._nativeFullscreenChanged) window._nativeFullscreenChanged(false);";
-                client->executeJS(js);
+                // Tell CEF to exit browser fullscreen - triggers fullscreenchange event
+                client->exitFullscreen();
             } else if (event.type == SDL_EVENT_WINDOW_RESIZED) {
                 auto resize_start = std::chrono::steady_clock::now();
                 current_width = event.window.data1;
@@ -907,6 +917,12 @@ int main(int argc, char* argv[]) {
                           << "ms" << std::endl;
             }
             have_event = SDL_PollEvent(&event);
+        }
+
+        // Process pending fullscreen from web content
+        int fs_request = pending_fullscreen.exchange(-1);
+        if (fs_request >= 0) {
+            SDL_SetWindowFullscreen(window, fs_request == 1);
         }
 
 #ifdef __APPLE__
@@ -1002,9 +1018,6 @@ int main(int argc, char* argv[]) {
                 } else if (cmd.cmd == "speed") {
                     double speed = cmd.intArg / 1000.0;
                     mpv.setSpeed(speed);
-                } else if (cmd.cmd == "fullscreen") {
-                    bool enable = cmd.intArg != 0;
-                    SDL_SetWindowFullscreen(window, enable);
                 } else if (cmd.cmd == "media_metadata") {
                     MediaMetadata meta = parseMetadataJson(cmd.url);
                     std::cerr << "[MAIN] Media metadata: title=" << meta.title << std::endl;
