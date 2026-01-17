@@ -1,6 +1,7 @@
 #include "cef/cef_client.h"
 #include "ui/menu_overlay.h"
 #include "settings.h"
+#include "input/sdl_to_vk.h"
 #include "include/cef_urlrequest.h"
 #include <iostream>
 #ifndef __APPLE__
@@ -379,35 +380,6 @@ void Client::sendMouseClick(int x, int y, bool down, int button, int clickCount,
     browser_->GetHost()->SendMouseClickEvent(event, btn_type, !down, clickCount);
 }
 
-// Map SDL keycodes to Windows virtual key codes (used by CEF cross-platform)
-static int sdlKeyToWindows(int sdlKey) {
-    switch (sdlKey) {
-        case 0x08: return 0x08;  // SDLK_BACKSPACE -> VK_BACK
-        case 0x09: return 0x09;  // SDLK_TAB -> VK_TAB
-        case 0x0D: return 0x0D;  // SDLK_RETURN -> VK_RETURN
-        case 0x1B: return 0x1B;  // SDLK_ESCAPE -> VK_ESCAPE
-        case 0x20: return 0x20;  // SDLK_SPACE -> VK_SPACE
-        case 0x7F: return 0x2E;  // SDLK_DELETE -> VK_DELETE
-        case 0x40000050: return 0x25;  // SDLK_LEFT -> VK_LEFT
-        case 0x4000004F: return 0x27;  // SDLK_RIGHT -> VK_RIGHT
-        case 0x40000052: return 0x26;  // SDLK_UP -> VK_UP
-        case 0x40000051: return 0x28;  // SDLK_DOWN -> VK_DOWN
-        case 0x4000004A: return 0x24;  // SDLK_HOME -> VK_HOME
-        case 0x4000004D: return 0x23;  // SDLK_END -> VK_END
-        case 0x4000004B: return 0x21;  // SDLK_PAGEUP -> VK_PRIOR
-        case 0x4000004E: return 0x22;  // SDLK_PAGEDOWN -> VK_NEXT
-        case 0x4000003A: return 0x74;  // SDLK_F5 -> VK_F5
-        case 0x40000044: return 0x7A;  // SDLK_F11 -> VK_F11
-        // Letters for Ctrl/Cmd+key combos (SDL uses lowercase)
-        case 'a': return 'A';
-        case 'c': return 'C';
-        case 'v': return 'V';
-        case 'x': return 'X';
-        case 'z': return 'Z';
-        case 'y': return 'Y';
-        default: return sdlKey;
-    }
-}
 
 #ifdef __APPLE__
 // Map SDL keycodes to Mac virtual key codes (Carbon kVK_* values)
@@ -444,7 +416,7 @@ static int sdlKeyToMacNative(int sdlKey) {
 void Client::sendKeyEvent(int key, bool down, int modifiers) {
     if (!browser_) return;
     CefKeyEvent event;
-    event.windows_key_code = sdlKeyToWindows(key);
+    event.windows_key_code = sdlKeyToWindowsVK(key);
 #ifdef __APPLE__
     event.native_key_code = sdlKeyToMacNative(key);
 #else
@@ -764,7 +736,7 @@ void OverlayClient::sendMouseWheel(int x, int y, float deltaX, float deltaY, int
 void OverlayClient::sendKeyEvent(int key, bool down, int modifiers) {
     if (!browser_) return;
     CefKeyEvent event;
-    event.windows_key_code = sdlKeyToWindows(key);
+    event.windows_key_code = sdlKeyToWindowsVK(key);
 #ifdef __APPLE__
     event.native_key_code = sdlKeyToMacNative(key);
 #else
