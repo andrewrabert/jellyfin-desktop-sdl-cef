@@ -27,6 +27,13 @@ public:
     virtual void sendChar(int charCode, int modifiers) = 0;
     virtual void sendTouch(int id, float x, float y, float radiusX, float radiusY,
                            float pressure, int type, int modifiers) = 0;
+    // Edit commands
+    virtual void paste(const char* mimeType, const void* data, size_t len) = 0;
+    virtual void copy() = 0;
+    virtual void cut() = 0;
+    virtual void selectAll() = 0;
+    virtual void undo() = 0;
+    virtual void redo() = 0;
 };
 
 // Message callback for player commands from renderer
@@ -139,6 +146,12 @@ public:
     void sendTouch(int id, float x, float y, float radiusX, float radiusY,
                    float pressure, int type, int modifiers) override;
     void sendFocus(bool focused) override;
+    void paste(const char* mimeType, const void* data, size_t len) override;
+    void copy() override;
+    void cut() override;
+    void selectAll() override;
+    void undo() override;
+    void redo() override;
     void resize(int width, int height);
     void loadUrl(const std::string& url);
 
@@ -228,6 +241,12 @@ public:
     void sendChar(int charCode, int modifiers) override;
     void sendTouch(int id, float x, float y, float radiusX, float radiusY,
                    float pressure, int type, int modifiers) override;
+    void paste(const char* mimeType, const void* data, size_t len) override;
+    void copy() override;
+    void cut() override;
+    void selectAll() override;
+    void undo() override;
+    void redo() override;
 
 private:
     int width_;

@@ -3,10 +3,145 @@
 #include "settings.h"
 #include "input/sdl_to_vk.h"
 #include "include/cef_urlrequest.h"
+#include "include/cef_parser.h"
+#include <SDL3/SDL.h>
 #include <iostream>
+#include <mutex>
 #ifndef __APPLE__
 #include <unistd.h>  // For dup()
 #endif
+
+namespace {
+
+void doCopy(CefRefPtr<CefBrowser> browser, bool cut) {
+    if (!browser) return;
+    auto frame = browser->GetFocusedFrame();
+    if (!frame) frame = browser->GetMainFrame();
+    if (!frame) return;
+    std::string js = cut ?
+        R"((function() {
+            const text = window.getSelection().toString();
+            if (text) {
+                window.jmpNative?.setClipboard?.('text/plain', btoa(text));
+            }
+            document.execCommand('delete');
+        })();)" :
+        R"((function() {
+            const el = document.activeElement;
+            let text = '';
+            if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
+                text = el.value.substring(el.selectionStart, el.selectionEnd);
+            } else {
+                text = window.getSelection().toString();
+            }
+            if (text) {
+                window.jmpNative?.setClipboard?.('text/plain', btoa(text));
+            }
+        })();)";
+    frame->ExecuteJavaScript(js, "", 0);
+}
+
+void doPaste(CefRefPtr<CefBrowser> browser, const char* mimeType, const void* data, size_t len) {
+    if (!browser || !data || len == 0) return;
+    auto frame = browser->GetFocusedFrame();
+    if (!frame) frame = browser->GetMainFrame();
+    if (!frame) return;
+    std::string b64Data = CefBase64Encode(data, len).ToString();
+    std::string b64Mime = CefBase64Encode(mimeType, strlen(mimeType)).ToString();
+
+    std::string js = R"((function() {
+        const b64 = ')" + b64Data + R"(';
+        const mime = atob(')" + b64Mime + R"(');
+        const binary = atob(b64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+        // For text, use execCommand which works reliably in inputs
+        if (mime.startsWith('text/')) {
+            const text = new TextDecoder().decode(bytes);
+            document.execCommand('insertText', false, text);
+            return;
+        }
+
+        // For binary (images etc), dispatch ClipboardEvent
+        const blob = new Blob([bytes], {type: mime});
+        const dt = new DataTransfer();
+        dt.items.add(new File([blob], 'paste', {type: mime}));
+        const event = new ClipboardEvent('paste', {
+            clipboardData: dt,
+            bubbles: true,
+            cancelable: true
+        });
+        document.activeElement.dispatchEvent(event);
+    })();)";
+    frame->ExecuteJavaScript(js, "", 0);
+}
+
+struct ClipboardData {
+    std::mutex mutex;
+    std::string mimeType;
+    std::vector<unsigned char> data;
+};
+static ClipboardData g_clipboard;
+
+const void* clipboardCallback(void*, const char* mime_type, size_t* size) {
+    std::lock_guard<std::mutex> lock(g_clipboard.mutex);
+    if (g_clipboard.mimeType == mime_type) {
+        *size = g_clipboard.data.size();
+        return g_clipboard.data.data();
+    }
+    *size = 0;
+    return nullptr;
+}
+
+void clipboardCleanup(void*) {
+    std::lock_guard<std::mutex> lock(g_clipboard.mutex);
+    g_clipboard.data.clear();
+    g_clipboard.mimeType.clear();
+}
+
+bool handleSetClipboard(CefRefPtr<CefListValue> args) {
+    std::string mimeType = args->GetString(0).ToString();
+    std::string b64 = args->GetString(1).ToString();
+    CefRefPtr<CefBinaryValue> decoded = CefBase64Decode(b64);
+    if (!decoded) {
+        std::cerr << "[Clipboard] base64 decode failed" << std::endl;
+        return true;
+    }
+
+    if (mimeType.rfind("text/", 0) == 0) {
+        std::string text(decoded->GetSize(), '\0');
+        decoded->GetData(text.data(), text.size(), 0);
+        SDL_SetClipboardText(text.c_str());
+    } else {
+        {
+            std::lock_guard<std::mutex> lock(g_clipboard.mutex);
+            g_clipboard.mimeType = mimeType;
+            g_clipboard.data.resize(decoded->GetSize());
+            decoded->GetData(g_clipboard.data.data(), g_clipboard.data.size(), 0);
+        }
+        const char* mimeTypes[] = { mimeType.c_str() };
+        SDL_SetClipboardData(clipboardCallback, clipboardCleanup, nullptr, mimeTypes, 1);
+    }
+    return true;
+}
+
+void handleGetClipboard(CefRefPtr<CefBrowser> browser, CefRefPtr<CefListValue> args) {
+    if (!browser) return;
+    std::string mimeType = args->GetString(0).ToString();
+    std::string b64;
+    size_t len = 0;
+    void* data = SDL_GetClipboardData(mimeType.c_str(), &len);
+    if (data && len > 0) {
+        b64 = CefBase64Encode(data, len).ToString();
+        SDL_free(data);
+    }
+    CefRefPtr<CefProcessMessage> msg = CefProcessMessage::Create("clipboardResult");
+    msg->GetArgumentList()->SetString(0, mimeType);
+    msg->GetArgumentList()->SetString(1, b64);
+    browser->GetMainFrame()->SendProcessMessage(PID_RENDERER, msg);
+}
+} // namespace
 
 // URL request client for server connectivity checks
 class ConnectivityURLRequestClient : public CefURLRequestClient {
@@ -200,6 +335,11 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
         // We'll decode this in main.cpp
         on_player_msg_("media_notify_rate", "", static_cast<int>(rate * 1000000), "");
         return true;
+    } else if (name == "setClipboard") {
+        return handleSetClipboard(args);
+    } else if (name == "getClipboard") {
+        handleGetClipboard(browser, args);
+        return true;
     }
 
     return false;
@@ -380,41 +520,9 @@ void Client::sendMouseClick(int x, int y, bool down, int button, int clickCount,
     browser_->GetHost()->SendMouseClickEvent(event, btn_type, !down, clickCount);
 }
 
-
-#ifdef __APPLE__
-// Map SDL keycodes to Mac virtual key codes (Carbon kVK_* values)
-static int sdlKeyToMacNative(int sdlKey) {
-    switch (sdlKey) {
-        case 0x08: return 0x33;  // SDLK_BACKSPACE -> kVK_Delete
-        case 0x09: return 0x30;  // SDLK_TAB -> kVK_Tab
-        case 0x0D: return 0x24;  // SDLK_RETURN -> kVK_Return
-        case 0x1B: return 0x35;  // SDLK_ESCAPE -> kVK_Escape
-        case 0x20: return 0x31;  // SDLK_SPACE -> kVK_Space
-        case 0x7F: return 0x75;  // SDLK_DELETE -> kVK_ForwardDelete
-        case 0x40000050: return 0x7B;  // SDLK_LEFT -> kVK_LeftArrow
-        case 0x4000004F: return 0x7C;  // SDLK_RIGHT -> kVK_RightArrow
-        case 0x40000052: return 0x7E;  // SDLK_UP -> kVK_UpArrow
-        case 0x40000051: return 0x7D;  // SDLK_DOWN -> kVK_DownArrow
-        case 0x4000004A: return 0x73;  // SDLK_HOME -> kVK_Home
-        case 0x4000004D: return 0x77;  // SDLK_END -> kVK_End
-        case 0x4000004B: return 0x74;  // SDLK_PAGEUP -> kVK_PageUp
-        case 0x4000004E: return 0x79;  // SDLK_PAGEDOWN -> kVK_PageDown
-        case 0x4000003A: return 0x60;  // SDLK_F5 -> kVK_F5
-        case 0x40000044: return 0x67;  // SDLK_F11 -> kVK_F11
-        // Letter keys (lowercase ASCII to Mac key codes)
-        case 'a': return 0x00;  // kVK_ANSI_A
-        case 'c': return 0x08;  // kVK_ANSI_C
-        case 'v': return 0x09;  // kVK_ANSI_V
-        case 'x': return 0x07;  // kVK_ANSI_X
-        case 'z': return 0x06;  // kVK_ANSI_Z
-        case 'y': return 0x10;  // kVK_ANSI_Y
-        default: return sdlKey;
-    }
-}
-#endif
-
 void Client::sendKeyEvent(int key, bool down, int modifiers) {
     if (!browser_) return;
+
     CefKeyEvent event;
     event.windows_key_code = sdlKeyToWindowsVK(key);
 #ifdef __APPLE__
@@ -478,6 +586,30 @@ void Client::sendTouch(int id, float x, float y, float radiusX, float radiusY,
     event.modifiers = modifiers;
     event.pointer_type = CEF_POINTER_TYPE_TOUCH;
     browser_->GetHost()->SendTouchEvent(event);
+}
+
+void Client::paste(const char* mimeType, const void* data, size_t len) {
+    doPaste(browser_, mimeType, data, len);
+}
+
+void Client::copy() {
+    doCopy(browser_, false);
+}
+
+void Client::cut() {
+    doCopy(browser_, true);
+}
+
+void Client::selectAll() {
+    if (browser_) browser_->GetMainFrame()->SelectAll();
+}
+
+void Client::undo() {
+    if (browser_) browser_->GetMainFrame()->Undo();
+}
+
+void Client::redo() {
+    if (browser_) browser_->GetMainFrame()->Redo();
 }
 
 void Client::resize(int width, int height) {
@@ -646,6 +778,15 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
         return true;
     }
 
+    if (name == "setClipboard") {
+        return handleSetClipboard(args);
+    }
+
+    if (name == "getClipboard") {
+        handleGetClipboard(browser, args);
+        return true;
+    }
+
     std::cerr << "[Overlay IPC] Unhandled: " << name << std::endl;
     return false;
 }
@@ -780,4 +921,28 @@ void OverlayClient::sendTouch(int id, float x, float y, float radiusX, float rad
     event.modifiers = modifiers;
     event.pointer_type = CEF_POINTER_TYPE_TOUCH;
     browser_->GetHost()->SendTouchEvent(event);
+}
+
+void OverlayClient::paste(const char* mimeType, const void* data, size_t len) {
+    doPaste(browser_, mimeType, data, len);
+}
+
+void OverlayClient::copy() {
+    doCopy(browser_, false);
+}
+
+void OverlayClient::cut() {
+    doCopy(browser_, true);
+}
+
+void OverlayClient::selectAll() {
+    if (browser_) browser_->GetMainFrame()->SelectAll();
+}
+
+void OverlayClient::undo() {
+    if (browser_) browser_->GetMainFrame()->Undo();
+}
+
+void OverlayClient::redo() {
+    if (browser_) browser_->GetMainFrame()->Redo();
 }

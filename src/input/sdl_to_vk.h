@@ -2,8 +2,10 @@
 
 #include <SDL3/SDL_keycode.h>
 
-// Maps SDL3 keycodes to Windows Virtual Key codes for CEF
-// CEF uses windows_key_code as its cross-platform abstraction even on Linux/macOS
+// Maps SDL3 keycodes to platform key codes for CEF
+// CEF key events need:
+//   windows_key_code - cross-platform (Windows VK codes used on all platforms)
+//   native_key_code  - platform-specific (Mac kVK_* on macOS, SDL key on Linux)
 //
 // Problem: SDL uses ASCII/Unicode for printable chars, but some ASCII values
 // collide with Windows VK codes for different keys:
@@ -201,3 +203,78 @@ inline int sdlKeyToWindowsVK(int sdlKey) {
         default: return sdlKey;
     }
 }
+
+#ifdef __APPLE__
+// Mac Carbon virtual key codes (kVK_* from Events.h)
+namespace kVK {
+    constexpr int ANSI_A        = 0x00;
+    constexpr int ANSI_S        = 0x01;
+    constexpr int ANSI_D        = 0x02;
+    constexpr int ANSI_F        = 0x03;
+    constexpr int ANSI_H        = 0x04;
+    constexpr int ANSI_G        = 0x05;
+    constexpr int ANSI_Z        = 0x06;
+    constexpr int ANSI_X        = 0x07;
+    constexpr int ANSI_C        = 0x08;
+    constexpr int ANSI_V        = 0x09;
+    constexpr int ANSI_B        = 0x0B;
+    constexpr int ANSI_Q        = 0x0C;
+    constexpr int ANSI_W        = 0x0D;
+    constexpr int ANSI_E        = 0x0E;
+    constexpr int ANSI_R        = 0x0F;
+    constexpr int ANSI_Y        = 0x10;
+    constexpr int ANSI_T        = 0x11;
+    constexpr int Return        = 0x24;
+    constexpr int Tab           = 0x30;
+    constexpr int Space         = 0x31;
+    constexpr int Delete        = 0x33;  // Backspace
+    constexpr int Escape        = 0x35;
+    constexpr int F5            = 0x60;
+    constexpr int F11           = 0x67;
+    constexpr int Home          = 0x73;
+    constexpr int PageUp        = 0x74;
+    constexpr int ForwardDelete = 0x75;
+    constexpr int End           = 0x77;
+    constexpr int PageDown      = 0x79;
+    constexpr int LeftArrow     = 0x7B;
+    constexpr int RightArrow    = 0x7C;
+    constexpr int DownArrow     = 0x7D;
+    constexpr int UpArrow       = 0x7E;
+}
+
+inline int sdlKeyToMacNative(int sdlKey) {
+    switch (sdlKey) {
+        // Navigation
+        case SDLK_LEFT:     return kVK::LeftArrow;
+        case SDLK_RIGHT:    return kVK::RightArrow;
+        case SDLK_UP:       return kVK::UpArrow;
+        case SDLK_DOWN:     return kVK::DownArrow;
+        case SDLK_HOME:     return kVK::Home;
+        case SDLK_END:      return kVK::End;
+        case SDLK_PAGEUP:   return kVK::PageUp;
+        case SDLK_PAGEDOWN: return kVK::PageDown;
+
+        // Editing
+        case SDLK_BACKSPACE: return kVK::Delete;
+        case SDLK_TAB:       return kVK::Tab;
+        case SDLK_RETURN:    return kVK::Return;
+        case SDLK_ESCAPE:    return kVK::Escape;
+        case SDLK_SPACE:     return kVK::Space;
+        case SDLK_DELETE:    return kVK::ForwardDelete;
+
+        // Function keys
+        case SDLK_F5:  return kVK::F5;
+        case SDLK_F11: return kVK::F11;
+
+        // Letters (for shortcuts)
+        case SDLK_A: return kVK::ANSI_A;
+        case SDLK_C: return kVK::ANSI_C;
+        case SDLK_V: return kVK::ANSI_V;
+        case SDLK_X: return kVK::ANSI_X;
+        case SDLK_Y: return kVK::ANSI_Y;
+        case SDLK_Z: return kVK::ANSI_Z;
+
+        default: return sdlKey;
+    }
+}
+#endif

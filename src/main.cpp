@@ -632,6 +632,8 @@ int main(int argc, char* argv[]) {
 
     CefBrowserSettings browser_settings;
     browser_settings.background_color = 0;
+    browser_settings.javascript_access_clipboard = STATE_ENABLED;
+    browser_settings.javascript_dom_paste = STATE_ENABLED;
     // Match CEF frame rate to display refresh rate
     SDL_DisplayID display = SDL_GetDisplayForWindow(window);
     const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(display);

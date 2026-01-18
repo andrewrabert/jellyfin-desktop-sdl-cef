@@ -105,6 +105,8 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
     jmpNative->SetValue("notifyArtwork", CefV8Value::CreateFunction("notifyArtwork", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("notifyQueueChange", CefV8Value::CreateFunction("notifyQueueChange", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("notifyRateChange", CefV8Value::CreateFunction("notifyRateChange", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
+    jmpNative->SetValue("setClipboard", CefV8Value::CreateFunction("setClipboard", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
+    jmpNative->SetValue("getClipboard", CefV8Value::CreateFunction("getClipboard", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     window->SetValue("jmpNative", jmpNative, V8_PROPERTY_ATTRIBUTE_READONLY);
 
     // Inject the JavaScript shim that creates window.api, window.NativeShell, etc.
@@ -141,6 +143,18 @@ bool App::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
         std::string js = "if (window._onServerConnectivityResult) {"
                         "  window._onServerConnectivityResult('" + url + "', " +
                         (success ? "true" : "false") + ", '" + resolved_url + "');"
+                        "}";
+        frame->ExecuteJavaScript(js, frame->GetURL(), 0);
+        return true;
+    }
+
+    if (name == "clipboardResult") {
+        CefRefPtr<CefListValue> args = message->GetArgumentList();
+        std::string mimeType = args->GetString(0).ToString();
+        std::string base64Data = args->GetString(1).ToString();
+        // base64 is safe for JS strings (no escaping needed)
+        std::string js = "if (window._onClipboardResult) {"
+                        "  window._onClipboardResult('" + mimeType + "', '" + base64Data + "');"
                         "}";
         frame->ExecuteJavaScript(js, frame->GetURL(), 0);
         return true;
@@ -354,6 +368,27 @@ bool NativeV8Handler::Execute(const CefString& name,
             msg->GetArgumentList()->SetString(0, url);
             browser_->GetMainFrame()->SendProcessMessage(PID_BROWSER, msg);
         }
+        return true;
+    }
+
+    if (name == "setClipboard") {
+        if (arguments.size() >= 2 && arguments[0]->IsString() && arguments[1]->IsString()) {
+            std::string mimeType = arguments[0]->GetStringValue().ToString();
+            std::string base64Data = arguments[1]->GetStringValue().ToString();
+            CefRefPtr<CefProcessMessage> msg = CefProcessMessage::Create("setClipboard");
+            msg->GetArgumentList()->SetString(0, mimeType);
+            msg->GetArgumentList()->SetString(1, base64Data);
+            browser_->GetMainFrame()->SendProcessMessage(PID_BROWSER, msg);
+        }
+        return true;
+    }
+
+    if (name == "getClipboard") {
+        std::string mimeType = arguments.size() >= 1 && arguments[0]->IsString()
+            ? arguments[0]->GetStringValue().ToString() : "text/plain";
+        CefRefPtr<CefProcessMessage> msg = CefProcessMessage::Create("getClipboard");
+        msg->GetArgumentList()->SetString(0, mimeType);
+        browser_->GetMainFrame()->SendProcessMessage(PID_BROWSER, msg);
         return true;
     }
 

@@ -3,7 +3,7 @@
 #include "input_layer.h"
 #include "window_state.h"
 #include "../cef/cef_client.h"
-#include <SDL3/SDL_timer.h>
+#include <SDL3/SDL.h>
 
 // Input layer that forwards events to a CEF browser client
 class BrowserLayer : public InputLayer, public WindowStateListener {
@@ -59,6 +59,38 @@ public:
             case SDL_EVENT_KEY_UP: {
                 bool down = (event.type == SDL_EVENT_KEY_DOWN);
                 int mods = getModifiers();
+
+                // Handle action modifier shortcuts (Cmd on macOS, Ctrl elsewhere)
+                if (down && isActionModifier()) {
+                    bool shift = mods & (1 << 0);
+                    switch (event.key.key) {
+                        case SDLK_V: {
+                            static const char* mimeTypes[] = {
+                                "image/png", "image/jpeg", "image/gif",
+                                "text/html", "text/plain"
+                            };
+                            for (const char* mime : mimeTypes) {
+                                size_t len = 0;
+                                void* data = SDL_GetClipboardData(mime, &len);
+                                if (data && len > 0) {
+                                    receiver_->paste(mime, data, len);
+                                    SDL_free(data);
+                                    break;
+                                }
+                            }
+                            return true;
+                        }
+                        case SDLK_C: receiver_->copy(); return true;
+                        case SDLK_X: receiver_->cut(); return true;
+                        case SDLK_A: receiver_->selectAll(); return true;
+                        case SDLK_Z:
+                            if (shift) receiver_->redo();
+                            else receiver_->undo();
+                            return true;
+                        case SDLK_Y: receiver_->redo(); return true;
+                    }
+                }
+
                 receiver_->sendKeyEvent(event.key.key, down, mods);
                 return true;
             }
@@ -110,6 +142,16 @@ private:
         if (mod & SDL_KMOD_CTRL) mods |= (1 << 2);
         if (mod & SDL_KMOD_ALT) mods |= (1 << 3);
         return mods;
+    }
+
+    // Returns true if the platform's action modifier is pressed (Cmd on macOS, Ctrl elsewhere)
+    bool isActionModifier() {
+        SDL_Keymod mod = SDL_GetModState();
+#ifdef __APPLE__
+        return mod & SDL_KMOD_GUI;
+#else
+        return mod & SDL_KMOD_CTRL;
+#endif
     }
 
     void updateClickCount(int x, int y, int btn) {
