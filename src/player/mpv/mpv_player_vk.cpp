@@ -345,6 +345,16 @@ void MpvPlayerVk::setNormalizationGain(double gainDb) {
     }
 }
 
+void MpvPlayerVk::setSubtitleTrack(int sid) {
+    if (!mpv_) return;
+    if (sid < 0) {
+        mpv_set_property_string(mpv_, "sid", "no");
+    } else {
+        int64_t id = sid;
+        mpv_set_property(mpv_, "sid", MPV_FORMAT_INT64, &id);
+    }
+}
+
 double MpvPlayerVk::getPosition() const {
     if (!mpv_) return 0;
     double pos = 0;

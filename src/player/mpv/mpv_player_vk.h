@@ -56,6 +56,7 @@ public:
     void setMuted(bool muted);
     void setSpeed(double speed);
     void setNormalizationGain(double gainDb);  // ReplayGain/normalization in dB
+    void setSubtitleTrack(int sid);  // -1 = off, 1+ = track index
 
     // State queries
     double getPosition() const;

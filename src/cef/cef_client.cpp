@@ -268,7 +268,12 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
     if (name == "playerLoad") {
         std::string url = args->GetString(0).ToString();
         int startMs = args->GetSize() > 1 ? args->GetInt(1) : 0;
+        int subIdx = args->GetSize() > 3 ? args->GetInt(3) : -1;
         std::string metadata = args->GetSize() > 4 ? args->GetString(4).ToString() : "{}";
+        // Encode subIdx in metadata JSON
+        if (subIdx >= 0 && metadata.size() > 1) {
+            metadata = "{\"_subIdx\":" + std::to_string(subIdx) + "," + metadata.substr(1);
+        }
         on_player_msg_("load", url, startMs, metadata);
         return true;
     } else if (name == "playerStop") {
@@ -295,6 +300,10 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
     } else if (name == "playerSetSpeed") {
         int rateX1000 = args->GetInt(0);
         on_player_msg_("speed", "", rateX1000, "");
+        return true;
+    } else if (name == "playerSetSubtitle") {
+        int sid = args->GetInt(0);
+        on_player_msg_("subtitle", "", sid, "");
         return true;
     } else if (name == "saveServerUrl") {
         std::string url = args->GetString(0).ToString();

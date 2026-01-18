@@ -3,6 +3,21 @@
         return mediaSource.MediaStreams.filter(s => s.Type === 'Audio');
     }
 
+    // Convert Jellyfin global MediaStream.Index to 1-based type-relative index
+    function getRelativeIndexByType(mediaStreams, jellyIndex, streamType) {
+        let relIndex = 1;
+        for (const source of mediaStreams) {
+            if (source.Type !== streamType || source.IsExternal) continue;
+            if (source.Index === jellyIndex) return relIndex;
+            relIndex += 1;
+        }
+        return null;
+    }
+
+    function getStreamByIndex(mediaStreams, index) {
+        return mediaStreams.find(s => s.Index === index) || null;
+    }
+
     class mpvVideoPlayer {
         constructor({ events, loading, appRouter, globalize, appHost, appSettings, confirm, dashboard }) {
             this.events = events;
@@ -130,20 +145,44 @@
                 this._currentPlayOptions = options;
                 this._core._currentTime = ms;
 
+                const streams = options.mediaSource?.MediaStreams || [];
                 const audioIdx = options.mediaSource.DefaultAudioStreamIndex ?? -1;
-                const subIdx = options.mediaSource.DefaultSubtitleStreamIndex ?? -1;
+                const defaultSubIdx = options.mediaSource.DefaultSubtitleStreamIndex ?? -1;
+
+                // Convert subtitle index to relative (audio conversion not yet implemented)
+                let subParam = -1;
+                if (defaultSubIdx >= 0) {
+                    const subStream = getStreamByIndex(streams, defaultSubIdx);
+                    if (subStream && subStream.DeliveryMethod === 'External' && subStream.DeliveryUrl) {
+                        subParam = -1;  // External not supported yet
+                    } else {
+                        const relIdx = getRelativeIndexByType(streams, defaultSubIdx, 'Subtitle');
+                        subParam = relIdx != null ? relIdx : -1;
+                    }
+                }
 
                 window.api.player.load(val,
                     { startMilliseconds: ms, autoplay: true },
-                    { type: 'video' },
+                    { type: 'video', metadata: options.item },
                     audioIdx,
-                    subIdx,
+                    subParam,
                     resolve);
             });
         }
 
         setSubtitleStreamIndex(index) {
-            window.api.player.setSubtitleStream(index);
+            if (index == null || index < 0) {
+                window.api.player.setSubtitleStream(-1);
+                return;
+            }
+            const streams = this._currentPlayOptions?.mediaSource?.MediaStreams || [];
+            const stream = getStreamByIndex(streams, index);
+            if (stream && stream.DeliveryMethod === 'External' && stream.DeliveryUrl) {
+                console.log('[Media] External subtitles not supported yet');
+                return;
+            }
+            const relIdx = getRelativeIndexByType(streams, index, 'Subtitle');
+            window.api.player.setSubtitleStream(relIdx != null ? relIdx : -1);
         }
 
         setSecondarySubtitleStreamIndex(index) {}

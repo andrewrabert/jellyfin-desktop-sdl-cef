@@ -95,6 +95,7 @@ void App::OnContextCreated(CefRefPtr<CefBrowser> browser,
     jmpNative->SetValue("playerSetVolume", CefV8Value::CreateFunction("playerSetVolume", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("playerSetMuted", CefV8Value::CreateFunction("playerSetMuted", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("playerSetSpeed", CefV8Value::CreateFunction("playerSetSpeed", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
+    jmpNative->SetValue("playerSetSubtitle", CefV8Value::CreateFunction("playerSetSubtitle", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("saveServerUrl", CefV8Value::CreateFunction("saveServerUrl", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("loadServer", CefV8Value::CreateFunction("loadServer", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
     jmpNative->SetValue("checkServerConnectivity", CefV8Value::CreateFunction("checkServerConnectivity", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
@@ -256,6 +257,17 @@ bool NativeV8Handler::Execute(const CefString& name,
             std::cerr << "[V8] playerSetSpeed: " << rateX1000 << std::endl;
             CefRefPtr<CefProcessMessage> msg = CefProcessMessage::Create("playerSetSpeed");
             msg->GetArgumentList()->SetInt(0, rateX1000);
+            browser_->GetMainFrame()->SendProcessMessage(PID_BROWSER, msg);
+        }
+        return true;
+    }
+
+    if (name == "playerSetSubtitle") {
+        if (arguments.size() >= 1 && arguments[0]->IsInt()) {
+            int sid = arguments[0]->GetIntValue();
+            std::cerr << "[V8] playerSetSubtitle: " << sid << std::endl;
+            CefRefPtr<CefProcessMessage> msg = CefProcessMessage::Create("playerSetSubtitle");
+            msg->GetArgumentList()->SetInt(0, sid);
             browser_->GetMainFrame()->SendProcessMessage(PID_BROWSER, msg);
         }
         return true;

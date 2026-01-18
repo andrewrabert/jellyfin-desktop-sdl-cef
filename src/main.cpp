@@ -141,6 +141,24 @@ int64_t jsonGetInt(const std::string& json, const std::string& key) {
     return num.empty() ? 0 : std::stoll(num);
 }
 
+// Extract integer from JSON with default value
+int jsonGetIntDefault(const std::string& json, const std::string& key, int defaultVal) {
+    std::string search = "\"" + key + "\":";
+    size_t pos = json.find(search);
+    if (pos == std::string::npos) return defaultVal;
+    pos += search.length();
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
+    if (pos >= json.size()) return defaultVal;
+    bool negative = false;
+    if (json[pos] == '-') { negative = true; pos++; }
+    int val = 0;
+    while (pos < json.size() && json[pos] >= '0' && json[pos] <= '9') {
+        val = val * 10 + (json[pos] - '0');
+        pos++;
+    }
+    return negative ? -val : val;
+}
+
 // Extract double from JSON (with optional hasValue output)
 double jsonGetDouble(const std::string& json, const std::string& key, bool* hasValue = nullptr) {
     std::string search = "\"" + key + "\":";
@@ -1022,6 +1040,11 @@ int main(int argc, char* argv[]) {
                             subsurface.setColorspace();
                         }
 #endif
+                        // Apply initial subtitle track if specified
+                        int subIdx = jsonGetIntDefault(cmd.metadata, "_subIdx", -1);
+                        if (subIdx >= 0) {
+                            mpv.setSubtitleTrack(subIdx);
+                        }
                         // mpv events will trigger state callbacks
                     } else {
                         client->emitError("Failed to load video");
@@ -1058,6 +1081,8 @@ int main(int argc, char* argv[]) {
                 } else if (cmd.cmd == "speed") {
                     double speed = cmd.intArg / 1000.0;
                     mpv.setSpeed(speed);
+                } else if (cmd.cmd == "subtitle") {
+                    mpv.setSubtitleTrack(cmd.intArg);
                 } else if (cmd.cmd == "media_metadata") {
                     MediaMetadata meta = parseMetadataJson(cmd.url);
                     std::cerr << "[MAIN] Media metadata: title=" << meta.title << std::endl;

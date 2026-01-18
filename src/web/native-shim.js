@@ -166,8 +166,9 @@
                 console.log('[Media] player.setPlaybackRate:', rate);
                 if (window.jmpNative) window.jmpNative.playerSetSpeed(rate);
             },
-            setSubtitleStream(stream) {
-                console.log('[Media] player.setSubtitleStream:', stream);
+            setSubtitleStream(index) {
+                console.log('[Media] player.setSubtitleStream:', index);
+                if (window.jmpNative) window.jmpNative.playerSetSubtitle(index != null ? index : -1);
             },
             setAudioStream(stream) {
                 console.log('[Media] player.setAudioStream:', stream);
