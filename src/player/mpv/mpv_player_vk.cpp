@@ -137,6 +137,17 @@ void MpvPlayerVk::handleMpvEvent(mpv_event* event) {
             // Note: EOF/QUIT/REDIRECT reasons are handled by eof-reached property observation
             break;
         }
+        case MPV_EVENT_LOG_MESSAGE: {
+            auto* msg = static_cast<mpv_event_log_message*>(event->data);
+            // Strip trailing newline if present
+            std::string text = msg->text;
+            if (!text.empty() && text.back() == '\n') {
+                text.pop_back();
+            }
+            // Format: [MPV] prefix: message
+            std::cerr << "[MPV] " << msg->prefix << ": " << text << std::endl;
+            break;
+        }
         default:
             break;
     }
@@ -189,6 +200,9 @@ bool MpvPlayerVk::init(VulkanContext* vk, VideoSurface* subsurface) {
         std::cerr << "mpv_initialize failed" << std::endl;
         return false;
     }
+
+    // Enable mpv log forwarding (info level by default)
+    mpv_request_log_messages(mpv_, "info");
 
     // Set up property observation (like jellyfin-desktop)
     mpv_observe_property(mpv_, 0, "playback-time", MPV_FORMAT_DOUBLE);
