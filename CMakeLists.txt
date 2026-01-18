@@ -251,12 +251,19 @@ if(APPLE)
     )
 endif()
 
-# Linux RPATH configuration for libcef.so loading
+# Linux RPATH configuration
 if(UNIX AND NOT APPLE)
-    set_target_properties(jellyfin-desktop-cef PROPERTIES
-        INSTALL_RPATH "$ORIGIN"
-        BUILD_WITH_INSTALL_RPATH TRUE
-    )
+    if(EXTERNAL_MPV_DIR)
+        set_target_properties(jellyfin-desktop-cef PROPERTIES
+            INSTALL_RPATH "$ORIGIN;${EXTERNAL_MPV_DIR}/lib"
+            BUILD_WITH_INSTALL_RPATH TRUE
+        )
+    else()
+        set_target_properties(jellyfin-desktop-cef PROPERTIES
+            INSTALL_RPATH "$ORIGIN"
+            BUILD_WITH_INSTALL_RPATH TRUE
+        )
+    endif()
 endif()
 
 # Copy CEF resources to build directory
@@ -297,37 +304,25 @@ if(NOT EXTERNAL_MPV_DIR)
     add_dependencies(jellyfin-desktop-cef mpv_build)
 endif()
 
-# Copy libmpv to build directory and fix install_name
-if(EXTERNAL_MPV_DIR)
+# Copy libmpv to build directory (only when building from source)
+if(NOT EXTERNAL_MPV_DIR)
     if(APPLE)
-        set(MPV_VERSIONED_LIB "${EXTERNAL_MPV_DIR}/lib/libmpv.2.dylib")
+        add_custom_command(TARGET jellyfin-desktop-cef POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy
+                "${MPV_BUILD_DIR}/libmpv.2.dylib"
+                "$<TARGET_FILE_DIR:jellyfin-desktop-cef>/libmpv.2.dylib"
+            # Fix libmpv install_name to load from executable directory
+            COMMAND install_name_tool -id "@executable_path/libmpv.2.dylib"
+                "$<TARGET_FILE_DIR:jellyfin-desktop-cef>/libmpv.2.dylib"
+            # Fix executable to use local libmpv
+            COMMAND install_name_tool -change "@rpath/libmpv.2.dylib"
+                "@executable_path/libmpv.2.dylib" "$<TARGET_FILE:jellyfin-desktop-cef>"
+        )
     else()
-        set(MPV_VERSIONED_LIB "${EXTERNAL_MPV_DIR}/lib/libmpv.so.2")
+        add_custom_command(TARGET jellyfin-desktop-cef POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy
+                "${MPV_BUILD_DIR}/libmpv.so.2"
+                "$<TARGET_FILE_DIR:jellyfin-desktop-cef>/libmpv.so.2"
+        )
     endif()
-else()
-    if(APPLE)
-        set(MPV_VERSIONED_LIB "${MPV_BUILD_DIR}/libmpv.2.dylib")
-    else()
-        set(MPV_VERSIONED_LIB "${MPV_BUILD_DIR}/libmpv.so.2")
-    endif()
-endif()
-
-if(APPLE)
-    add_custom_command(TARGET jellyfin-desktop-cef POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy
-            "${MPV_VERSIONED_LIB}"
-            "$<TARGET_FILE_DIR:jellyfin-desktop-cef>/libmpv.2.dylib"
-        # Fix libmpv install_name to load from executable directory
-        COMMAND install_name_tool -id "@executable_path/libmpv.2.dylib"
-            "$<TARGET_FILE_DIR:jellyfin-desktop-cef>/libmpv.2.dylib"
-        # Fix executable to use local libmpv
-        COMMAND install_name_tool -change "@rpath/libmpv.2.dylib"
-            "@executable_path/libmpv.2.dylib" "$<TARGET_FILE:jellyfin-desktop-cef>"
-    )
-else()
-    add_custom_command(TARGET jellyfin-desktop-cef POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy
-            "${MPV_VERSIONED_LIB}"
-            "$<TARGET_FILE_DIR:jellyfin-desktop-cef>/libmpv.so.2"
-    )
 endif()
