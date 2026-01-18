@@ -120,7 +120,15 @@ else()
 endif()
 
 # mpv configuration
-set(EXTERNAL_MPV_DIR "" CACHE PATH "Path to external mpv installation (must contain include/ and lib/)")
+# Auto-detect external mpv from /opt if it exists
+set(_DEFAULT_EXTERNAL_MPV_DIR "")
+if(EXISTS "/opt/jellyfin-desktop-cef/libmpv/lib/libmpv.so")
+    set(_DEFAULT_EXTERNAL_MPV_DIR "/opt/jellyfin-desktop-cef/libmpv")
+elseif(APPLE AND EXISTS "/opt/jellyfin-desktop-cef/libmpv/lib/libmpv.dylib")
+    set(_DEFAULT_EXTERNAL_MPV_DIR "/opt/jellyfin-desktop-cef/libmpv")
+endif()
+
+set(EXTERNAL_MPV_DIR "${_DEFAULT_EXTERNAL_MPV_DIR}" CACHE PATH "Path to external mpv installation (must contain include/ and lib/)")
 
 if(EXTERNAL_MPV_DIR)
     message(STATUS "Using external mpv from: ${EXTERNAL_MPV_DIR}")

@@ -1,6 +1,12 @@
 # FindCEF.cmake - Find CEF binary distribution
 
-set(EXTERNAL_CEF_DIR "" CACHE PATH "Path to external CEF installation (with prebuilt libcef_dll_wrapper.a)")
+# Auto-detect external CEF from /opt if it exists
+set(_DEFAULT_EXTERNAL_CEF_DIR "")
+if(EXISTS "/opt/jellyfin-desktop-cef/libcef/include/cef_version.h")
+    set(_DEFAULT_EXTERNAL_CEF_DIR "/opt/jellyfin-desktop-cef/libcef")
+endif()
+
+set(EXTERNAL_CEF_DIR "${_DEFAULT_EXTERNAL_CEF_DIR}" CACHE PATH "Path to external CEF installation (with prebuilt libcef_dll_wrapper.a)")
 
 if(EXTERNAL_CEF_DIR)
     # Use external CEF installation
