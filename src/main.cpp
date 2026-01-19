@@ -432,7 +432,7 @@ int main(int argc, char* argv[]) {
     std::filesystem::path framework_path = exe_path / "Frameworks" / "Chromium Embedded Framework.framework";
     CefString(&settings.framework_dir_path).FromString(framework_path.string());
     // Use main executable as subprocess - it handles CefExecuteProcess early
-    CefString(&settings.browser_subprocess_path).FromString((exe_path / "jellyfin-desktop").string());
+    CefString(&settings.browser_subprocess_path).FromString((exe_path / "jellyfin-desktop-cef").string());
 #else
     std::filesystem::path exe_path = std::filesystem::canonical("/proc/self/exe").parent_path();
 #ifdef CEF_RESOURCES_DIR
@@ -490,6 +490,21 @@ int main(int argc, char* argv[]) {
     std::atomic<int> paint_write_idx{0};  // CEF writes here
     std::mutex paint_swap_mutex;  // Only held during buffer swap
     int paint_width = 0, paint_height = 0;
+
+    // Helper to flush paint buffer to compositor (used by both macOS and Linux paths)
+    auto flushPaintBuffer = [&]() {
+        std::lock_guard<std::mutex> lock(paint_swap_mutex);
+        int read_idx = 1 - paint_write_idx.load(std::memory_order_acquire);
+        auto& buf = paint_buffers[read_idx];
+        if (buf.dirty && !buf.data.empty()) {
+            void* staging = compositor.getStagingBuffer(buf.width, buf.height);
+            if (staging) {
+                memcpy(staging, buf.data.data(), buf.width * buf.height * 4);
+                compositor.markStagingDirty();
+            }
+            buf.dirty = false;
+        }
+    };
 
     // Player command queue
     struct PlayerCmd {
@@ -1251,6 +1266,8 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        flushPaintBuffer();
+
         // Composite main browser (Metal handles its own presentation)
         // Always call composite() - it handles "no content yet" internally and uploads staging data
         if (test_video.empty() && (compositor.hasValidOverlay() || compositor.hasPendingContent())) {
@@ -1282,20 +1299,7 @@ int main(int argc, char* argv[]) {
         // Import queued DMA-BUF if any (GPU path)
         compositor.importQueuedDmaBuf();
 
-        // Flush paint buffer to compositor
-        {
-            std::lock_guard<std::mutex> lock(paint_swap_mutex);
-            int read_idx = 1 - paint_write_idx.load(std::memory_order_acquire);
-            auto& buf = paint_buffers[read_idx];
-            if (buf.dirty && !buf.data.empty()) {
-                void* staging = compositor.getStagingBuffer(buf.width, buf.height);
-                if (staging) {
-                    memcpy(staging, buf.data.data(), buf.width * buf.height * 4);
-                    compositor.markStagingDirty();
-                }
-                buf.dirty = false;
-            }
-        }
+        flushPaintBuffer();
 
         // Flush pending overlay data to GPU texture (software path)
         compositor.flushOverlay();
