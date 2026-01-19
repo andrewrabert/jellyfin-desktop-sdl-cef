@@ -319,10 +319,11 @@ int main(int argc, char* argv[]) {
     const int height = 720;
 
     // Use plain Wayland window - we create our own EGL context
+    // SDL_WINDOW_HIGH_PIXEL_DENSITY enables HiDPI support
     SDL_Window* window = SDL_CreateWindow(
         "Jellyfin Desktop CEF",
         width, height,
-        SDL_WINDOW_RESIZABLE
+        SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY
     );
 
     if (!window) {
@@ -366,8 +367,15 @@ int main(int argc, char* argv[]) {
     }
 
     // Initialize Metal compositor for CEF overlay (renders on top of video)
+    float initial_scale = SDL_GetWindowDisplayScale(window);
+    int physical_width = static_cast<int>(width * initial_scale);
+    int physical_height = static_cast<int>(height * initial_scale);
+    std::cerr << "[macOS HiDPI] scale=" << initial_scale
+              << " logical=" << width << "x" << height
+              << " physical=" << physical_width << "x" << physical_height << std::endl;
+
     MetalCompositor compositor;
-    if (!compositor.init(window, width, height)) {
+    if (!compositor.init(window, physical_width, physical_height)) {
         std::cerr << "MetalCompositor init failed" << std::endl;
         SDL_DestroyWindow(window);
         SDL_Quit();
@@ -376,7 +384,7 @@ int main(int argc, char* argv[]) {
 
     // Second compositor for overlay browser
     MetalCompositor overlay_compositor;
-    if (!overlay_compositor.init(window, width, height)) {
+    if (!overlay_compositor.init(window, physical_width, physical_height)) {
         std::cerr << "Overlay compositor init failed" << std::endl;
         SDL_DestroyWindow(window);
         SDL_Quit();
@@ -461,8 +469,15 @@ int main(int argc, char* argv[]) {
     }
 
     // Initialize OpenGL compositor for CEF overlay
+    float initial_scale = SDL_GetWindowDisplayScale(window);
+    int physical_width = static_cast<int>(width * initial_scale);
+    int physical_height = static_cast<int>(height * initial_scale);
+    std::cerr << "[HiDPI] initial_scale=" << initial_scale
+              << " logical=" << width << "x" << height
+              << " physical=" << physical_width << "x" << physical_height << std::endl;
+
     OpenGLCompositor compositor;
-    if (!compositor.init(&egl, width, height, use_gpu_overlay)) {
+    if (!compositor.init(&egl, physical_width, physical_height, use_gpu_overlay)) {
         std::cerr << "OpenGLCompositor init failed" << std::endl;
         SDL_DestroyWindow(window);
         SDL_Quit();
@@ -471,7 +486,7 @@ int main(int argc, char* argv[]) {
 
     // Second compositor for overlay browser
     OpenGLCompositor overlay_compositor;
-    if (!overlay_compositor.init(&egl, width, height, false)) {  // Always software for overlay
+    if (!overlay_compositor.init(&egl, physical_width, physical_height, false)) {  // Always software for overlay
         std::cerr << "Overlay compositor init failed" << std::endl;
         SDL_DestroyWindow(window);
         SDL_Quit();
@@ -653,6 +668,11 @@ int main(int argc, char* argv[]) {
     // Cursor state
     SDL_Cursor* current_cursor = nullptr;
 
+    // Physical pixel size callback for HiDPI support
+    auto getPhysicalSize = [window](int& w, int& h) {
+        SDL_GetWindowSizeInPixels(window, &w, &h);
+    };
+
     // Overlay browser client (for loading UI)
     CefRefPtr<OverlayClient> overlay_client(new OverlayClient(width, height,
         [&](const void* buffer, int w, int h) {
@@ -678,7 +698,8 @@ int main(int argc, char* argv[]) {
             std::cerr << "[Overlay] loadServer callback: " << url << std::endl;
             std::lock_guard<std::mutex> lock(cmd_mutex);
             pending_server_url = url;
-        }
+        },
+        getPhysicalSize
     ));
 
     // Track who initiated fullscreen (only changes from NONE, returns to NONE on exit)
@@ -751,7 +772,8 @@ int main(int argc, char* argv[]) {
                 }
                 // WM-initiated fullscreen: ignore CEF exit request
             }
-        }
+        },
+        getPhysicalSize
     ));
 
     CefWindowInfo window_info;
@@ -1064,8 +1086,11 @@ int main(int argc, char* argv[]) {
 
 #ifdef __APPLE__
                 // Resize Metal compositor and video layer
-                compositor.resize(current_width, current_height);
-                overlay_compositor.resize(current_width, current_height);
+                float scale = SDL_GetWindowDisplayScale(window);
+                int physical_w = static_cast<int>(current_width * scale);
+                int physical_h = static_cast<int>(current_height * scale);
+                compositor.resize(physical_w, physical_h);
+                overlay_compositor.resize(physical_w, physical_h);
                 client->resize(current_width, current_height);
                 overlay_client->resize(current_width, current_height);
 
@@ -1081,10 +1106,13 @@ int main(int argc, char* argv[]) {
                 overlay_client->resize(current_width, current_height);
                 video_needs_rerender = true;  // Force video rerender on resize
 #else
-                // Resize EGL context (handles wl_egl_window resize)
-                egl.resize(current_width, current_height);
-                compositor.resize(current_width, current_height);
-                overlay_compositor.resize(current_width, current_height);
+                // Resize EGL context and compositors with physical dimensions
+                float scale = SDL_GetWindowDisplayScale(window);
+                int physical_w = static_cast<int>(current_width * scale);
+                int physical_h = static_cast<int>(current_height * scale);
+                egl.resize(physical_w, physical_h);
+                compositor.resize(physical_w, physical_h);
+                overlay_compositor.resize(physical_w, physical_h);
                 client->resize(current_width, current_height);
                 overlay_client->resize(current_width, current_height);
 
@@ -1100,6 +1128,24 @@ int main(int argc, char* argv[]) {
                 std::cerr << "[" << _ms() << "ms] resize: total="
                           << std::chrono::duration_cast<std::chrono::milliseconds>(resize_end-resize_start).count()
                           << "ms" << std::endl;
+            } else if (event.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED) {
+                float new_scale = SDL_GetWindowDisplayScale(window);
+                int physical_w = static_cast<int>(current_width * new_scale);
+                int physical_h = static_cast<int>(current_height * new_scale);
+                std::cerr << "[HiDPI] Scale changed to " << new_scale
+                          << ", physical: " << physical_w << "x" << physical_h << std::endl;
+
+                // Resize compositors to new physical dimensions
+                compositor.resize(physical_w, physical_h);
+                overlay_compositor.resize(physical_w, physical_h);
+
+                // Notify CEF of the scale change
+                if (client->browser()) {
+                    client->browser()->GetHost()->WasResized();
+                }
+                if (overlay_client->browser()) {
+                    overlay_client->browser()->GetHost()->WasResized();
+                }
             }
             have_event = SDL_PollEvent(&event);
         }
@@ -1424,7 +1470,13 @@ int main(int argc, char* argv[]) {
         // Flush pending overlay data to GPU texture (software path)
         compositor.flushOverlay();
 
+        // Get physical dimensions for viewport (HiDPI)
+        float frame_scale = SDL_GetWindowDisplayScale(window);
+        int viewport_w = static_cast<int>(current_width * frame_scale);
+        int viewport_h = static_cast<int>(current_height * frame_scale);
+
         // Clear main surface (transparent when video ready, black otherwise)
+        glViewport(0, 0, viewport_w, viewport_h);
         float bg_alpha = video_ready ? 0.0f : 1.0f;
         glClearColor(0.0f, 0.0f, 0.0f, bg_alpha);
         glClear(GL_COLOR_BUFFER_BIT);
@@ -1432,14 +1484,14 @@ int main(int argc, char* argv[]) {
         // Composite main browser (always full opacity when no video)
         if (test_video.empty() && compositor.hasValidOverlay()) {
             float alpha = video_ready ? overlay_alpha : 1.0f;
-            compositor.composite(current_width, current_height, alpha);
+            compositor.composite(viewport_w, viewport_h, alpha);
         }
 
         // Composite overlay browser (with fade alpha)
         if (overlay_state != OverlayState::HIDDEN && overlay_browser_alpha > 0.01f) {
             overlay_compositor.flushOverlay();
             if (overlay_compositor.hasValidOverlay()) {
-                overlay_compositor.composite(current_width, current_height, overlay_browser_alpha);
+                overlay_compositor.composite(viewport_w, viewport_h, overlay_browser_alpha);
             }
         }
 

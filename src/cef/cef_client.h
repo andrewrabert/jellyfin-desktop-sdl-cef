@@ -46,6 +46,9 @@ using CursorChangeCallback = std::function<void(cef_cursor_type_t type)>;
 // Fullscreen mode change callback (web content requested fullscreen)
 using FullscreenChangeCallback = std::function<void(bool fullscreen)>;
 
+// Physical pixel size callback (returns actual framebuffer dimensions)
+using PhysicalSizeCallback = std::function<void(int& width, int& height)>;
+
 #ifdef __APPLE__
 // macOS: IOSurface callback
 using IOSurfacePaintCallback = std::function<void(IOSurfaceRef surface, int width, int height)>;
@@ -77,12 +80,14 @@ public:
     Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg = nullptr,
            IOSurfacePaintCallback on_iosurface_paint = nullptr, MenuOverlay* menu = nullptr,
            CursorChangeCallback on_cursor_change = nullptr,
-           FullscreenChangeCallback on_fullscreen_change = nullptr);
+           FullscreenChangeCallback on_fullscreen_change = nullptr,
+           PhysicalSizeCallback physical_size_cb = nullptr);
 #else
     Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg = nullptr,
            AcceleratedPaintCallback on_accel_paint = nullptr, MenuOverlay* menu = nullptr,
            CursorChangeCallback on_cursor_change = nullptr,
-           FullscreenChangeCallback on_fullscreen_change = nullptr);
+           FullscreenChangeCallback on_fullscreen_change = nullptr,
+           PhysicalSizeCallback physical_size_cb = nullptr);
 #endif
 
     // CefClient
@@ -136,6 +141,7 @@ public:
                         CefRefPtr<CefRunContextMenuCallback> callback) override;
 
     bool isClosed() const { return is_closed_; }
+    CefRefPtr<CefBrowser> browser() const { return browser_; }
 
     // Input forwarding (InputReceiver)
     void sendMouseMove(int x, int y, int modifiers) override;
@@ -184,6 +190,7 @@ private:
     MenuOverlay* menu_ = nullptr;
     CursorChangeCallback on_cursor_change_;
     FullscreenChangeCallback on_fullscreen_change_;
+    PhysicalSizeCallback physical_size_cb_;
     std::atomic<bool> is_closed_ = false;
     CefRefPtr<CefBrowser> browser_;
 
@@ -203,7 +210,8 @@ public:
     using PaintCallback = std::function<void(const void* buffer, int width, int height)>;
     using LoadServerCallback = std::function<void(const std::string& url)>;
 
-    OverlayClient(int width, int height, PaintCallback on_paint, LoadServerCallback on_load_server);
+    OverlayClient(int width, int height, PaintCallback on_paint, LoadServerCallback on_load_server,
+                  PhysicalSizeCallback physical_size_cb = nullptr);
 
     CefRefPtr<CefRenderHandler> GetRenderHandler() override { return this; }
     CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
@@ -232,6 +240,7 @@ public:
     void OnBeforeClose(CefRefPtr<CefBrowser> browser) override;
 
     bool isClosed() const { return is_closed_; }
+    CefRefPtr<CefBrowser> browser() const { return browser_; }
     void resize(int width, int height);
     void sendFocus(bool focused) override;
     void sendMouseMove(int x, int y, int modifiers) override;
@@ -253,6 +262,7 @@ private:
     int height_;
     PaintCallback on_paint_;
     LoadServerCallback on_load_server_;
+    PhysicalSizeCallback physical_size_cb_;
     std::atomic<bool> is_closed_ = false;
     CefRefPtr<CefBrowser> browser_;
 

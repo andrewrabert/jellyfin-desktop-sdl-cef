@@ -2,6 +2,7 @@
 #include <mpv/client.h>
 #include <mpv/render.h>
 #include <mpv/render_gl.h>
+#include <dlfcn.h>
 #include <iostream>
 #include <clocale>
 #include <cmath>

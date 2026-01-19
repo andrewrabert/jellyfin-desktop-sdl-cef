@@ -97,6 +97,7 @@ bool MetalCompositor::init(SDL_Window* window, uint32_t width, uint32_t height) 
     metal_layer_.framebufferOnly = YES;
     metal_layer_.frame = frame;
     metal_layer_.drawableSize = CGSizeMake(width, height);
+    metal_layer_.contentsScale = [ns_window backingScaleFactor];
     metal_layer_.opaque = NO;  // Allow transparency for video to show through
 
     [metal_view_ setLayer:metal_layer_];
@@ -225,13 +226,18 @@ void MetalCompositor::updateOverlay(const void* data, int width, int height) {
 }
 
 void* MetalCompositor::getStagingBuffer(int width, int height) {
+    static bool first_call = true;
+    if (first_call) {
+        NSLog(@"MetalCompositor: getStagingBuffer first call - requested %dx%d, have %dx%d",
+              width, height, width_, height_);
+        first_call = false;
+    }
+    // Auto-resize if dimensions don't match (handles HiDPI scale mismatches)
+    if (width > 0 && height > 0 && (width != (int)width_ || height != (int)height_)) {
+        NSLog(@"MetalCompositor: auto-resizing from %dx%d to %dx%d", width_, height_, width, height);
+        resize(width, height);
+    }
     if (!staging_buffer_ || width != (int)width_ || height != (int)height_) {
-        static bool first_mismatch = true;
-        if (first_mismatch) {
-            NSLog(@"MetalCompositor: getStagingBuffer size mismatch - requested %dx%d, have %dx%d (buffer=%p)",
-                  width, height, width_, height_, staging_buffer_);
-            first_mismatch = false;
-        }
         return nullptr;
     }
     return staging_buffer_;
@@ -314,14 +320,17 @@ void MetalCompositor::resize(uint32_t width, uint32_t height) {
     width_ = width;
     height_ = height;
 
-    // Resize layer
+    // Resize layer drawable (physical pixels)
     if (metal_layer_) {
         metal_layer_.drawableSize = CGSizeMake(width, height);
+        if (parent_window_) {
+            metal_layer_.contentsScale = [parent_window_ backingScaleFactor];
+        }
     }
 
-    // Resize view
-    if (metal_view_) {
-        NSRect frame = NSMakeRect(0, 0, width, height);
+    // View frame uses logical coordinates - get from superview
+    if (metal_view_ && [metal_view_ superview]) {
+        NSRect frame = [[metal_view_ superview] bounds];
         [metal_view_ setFrame:frame];
     }
 

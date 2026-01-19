@@ -88,10 +88,10 @@ bool EGLContext_::init(SDL_Window* window) {
         return false;
     }
 
-    // Get window size
-    SDL_GetWindowSize(window, &width_, &height_);
+    // Get window size in pixels (for HiDPI support)
+    SDL_GetWindowSizeInPixels(window, &width_, &height_);
 
-    // Create wayland-egl window and EGL surface
+    // Create wayland-egl window and EGL surface at pixel size
     egl_window_ = wl_egl_window_create(wl_surface, width_, height_);
     if (!egl_window_) {
         std::cerr << "[EGL] Failed to create wayland-egl window" << std::endl;

@@ -205,19 +205,23 @@ private:
 #ifdef __APPLE__
 Client::Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg,
                IOSurfacePaintCallback on_iosurface_paint, MenuOverlay* menu,
-               CursorChangeCallback on_cursor_change, FullscreenChangeCallback on_fullscreen_change)
+               CursorChangeCallback on_cursor_change, FullscreenChangeCallback on_fullscreen_change,
+               PhysicalSizeCallback physical_size_cb)
     : width_(width), height_(height), on_paint_(std::move(on_paint)),
       on_player_msg_(std::move(on_player_msg)), on_iosurface_paint_(std::move(on_iosurface_paint)),
       menu_(menu), on_cursor_change_(std::move(on_cursor_change)),
-      on_fullscreen_change_(std::move(on_fullscreen_change)) {}
+      on_fullscreen_change_(std::move(on_fullscreen_change)),
+      physical_size_cb_(std::move(physical_size_cb)) {}
 #else
 Client::Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg,
                AcceleratedPaintCallback on_accel_paint, MenuOverlay* menu,
-               CursorChangeCallback on_cursor_change, FullscreenChangeCallback on_fullscreen_change)
+               CursorChangeCallback on_cursor_change, FullscreenChangeCallback on_fullscreen_change,
+               PhysicalSizeCallback physical_size_cb)
     : width_(width), height_(height), on_paint_(std::move(on_paint)),
       on_player_msg_(std::move(on_player_msg)), on_accel_paint_(std::move(on_accel_paint)),
       menu_(menu), on_cursor_change_(std::move(on_cursor_change)),
-      on_fullscreen_change_(std::move(on_fullscreen_change)) {}
+      on_fullscreen_change_(std::move(on_fullscreen_change)),
+      physical_size_cb_(std::move(physical_size_cb)) {}
 #endif
 
 bool Client::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
@@ -367,12 +371,30 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
 }
 
 void Client::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
+    // CEF expects logical dimensions here; device_scale_factor handles scaling
+    static bool first = true;
+    if (first) {
+        int phys_w = 0, phys_h = 0;
+        if (physical_size_cb_) physical_size_cb_(phys_w, phys_h);
+        std::cerr << "[CEF] GetViewRect: returning logical " << width_ << "x" << height_
+                  << " (physical=" << phys_w << "x" << phys_h << ")" << std::endl;
+        first = false;
+    }
     rect.Set(0, 0, width_, height_);
 }
 
 bool Client::GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo& screen_info) {
-    // Force 1.0 scale factor to avoid Retina 2x rendering
-    screen_info.device_scale_factor = 1.0f;
+    // Compute scale from physical/logical ratio
+    int physical_w = 0, physical_h = 0;
+    if (physical_size_cb_) {
+        physical_size_cb_(physical_w, physical_h);
+    }
+    // Default to 1.0 scale if physical dimensions not available
+    float scale = 1.0f;
+    if (physical_w > 0 && width_ > 0) {
+        scale = static_cast<float>(physical_w) / width_;
+    }
+    screen_info.device_scale_factor = scale;
     screen_info.depth = 32;
     screen_info.depth_per_component = 8;
     screen_info.is_monochrome = false;
@@ -395,6 +417,12 @@ void Client::OnPopupSize(CefRefPtr<CefBrowser> browser, const CefRect& rect) {
 void Client::OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
                      const RectList& dirtyRects, const void* buffer,
                      int width, int height) {
+    static bool first = true;
+    if (first) {
+        std::cerr << "[CEF] OnPaint: " << width << "x" << height
+                  << " type=" << (type == PET_VIEW ? "VIEW" : "POPUP") << std::endl;
+        first = false;
+    }
     if (!on_paint_) return;
 
     if (type == PET_POPUP) {
@@ -752,8 +780,11 @@ bool Client::RunContextMenu(CefRefPtr<CefBrowser> browser,
 }
 
 // OverlayClient implementation
-OverlayClient::OverlayClient(int width, int height, PaintCallback on_paint, LoadServerCallback on_load_server)
-    : width_(width), height_(height), on_paint_(std::move(on_paint)), on_load_server_(std::move(on_load_server)) {}
+OverlayClient::OverlayClient(int width, int height, PaintCallback on_paint, LoadServerCallback on_load_server,
+                             PhysicalSizeCallback physical_size_cb)
+    : width_(width), height_(height), on_paint_(std::move(on_paint)),
+      on_load_server_(std::move(on_load_server)),
+      physical_size_cb_(std::move(physical_size_cb)) {}
 
 bool OverlayClient::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
                                       cef_log_severity_t level,
@@ -834,12 +865,30 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
 }
 
 void OverlayClient::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
+    // CEF expects logical dimensions here; device_scale_factor handles scaling
+    static bool first = true;
+    if (first) {
+        int phys_w = 0, phys_h = 0;
+        if (physical_size_cb_) physical_size_cb_(phys_w, phys_h);
+        std::cerr << "[Overlay] GetViewRect: returning logical " << width_ << "x" << height_
+                  << " (physical=" << phys_w << "x" << phys_h << ")" << std::endl;
+        first = false;
+    }
     rect.Set(0, 0, width_, height_);
 }
 
 bool OverlayClient::GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo& screen_info) {
-    // Force 1.0 scale factor to avoid Retina 2x rendering
-    screen_info.device_scale_factor = 1.0f;
+    // Compute scale from physical/logical ratio
+    int physical_w = 0, physical_h = 0;
+    if (physical_size_cb_) {
+        physical_size_cb_(physical_w, physical_h);
+    }
+    // Default to 1.0 scale if physical dimensions not available
+    float scale = 1.0f;
+    if (physical_w > 0 && width_ > 0) {
+        scale = static_cast<float>(physical_w) / width_;
+    }
+    screen_info.device_scale_factor = scale;
     screen_info.depth = 32;
     screen_info.depth_per_component = 8;
     screen_info.is_monochrome = false;
@@ -851,6 +900,11 @@ bool OverlayClient::GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo& 
 void OverlayClient::OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
                              const RectList& dirtyRects, const void* buffer,
                              int width, int height) {
+    static bool first = true;
+    if (first) {
+        std::cerr << "[Overlay] OnPaint: " << width << "x" << height << std::endl;
+        first = false;
+    }
     if (on_paint_ && type == PET_VIEW) {
         on_paint_(buffer, width, height);
     }
