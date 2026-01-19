@@ -14,6 +14,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 if(UNIX AND NOT APPLE)
     add_compile_options(
         -fno-strict-aliasing
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
         -fPIC
         -fstack-protector
         -funwind-tables
