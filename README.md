@@ -2,11 +2,17 @@
 
 Experimental rewrite of [Jellyfin Desktop](https://github.com/jellyfin/jellyfin-desktop) built on [CEF](https://bitbucket.org/chromiumembedded/cef).
 
-## Supported Platforms
+## Downloads
+### Linux (Wayland only; no X11 support)
+- Arch Linux (AUR): [jellyfin-desktop-cef-git](https://aur.archlinux.org/packages/jellyfin-desktop-cef-git)
 
-- **Linux** - Wayland only (no X11 support)
-  - Arch Linux (AUR): [jellyfin-desktop-cef-git](https://aur.archlinux.org/packages/jellyfin-desktop-cef-git)
-- **macOS** - Apple Silicon and Intel
+### macOS
+- [Apple Silicon](https://nightly.link/jellyfin-labs/jellyfin-desktop-cef/workflows/build-macos/main/macos-arm64.zip)
+
+After installing, remove quarantine: 
+```
+sudo xattr -cr /Applications/Jellyfin\ Desktop\ CEF.app
+```
 
 ## Architecture
 
