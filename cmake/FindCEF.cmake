@@ -92,10 +92,10 @@ else()
 
     # Find libcef_dll_wrapper - check multiple possible locations
     if(WIN32)
-        # Windows: Ninja builds to libcef_dll_wrapper/, MSBuild to libcef_dll_wrapper/Release/
+        # Windows: Ninja builds to build/libcef_dll_wrapper/, MSBuild to build/libcef_dll_wrapper/Release/
         set(_WRAPPER_SEARCH_PATHS
-            "${CEF_ROOT}/libcef_dll_wrapper/libcef_dll_wrapper.lib"
-            "${CEF_ROOT}/libcef_dll_wrapper/Release/libcef_dll_wrapper.lib"
+            "${CEF_ROOT}/build/libcef_dll_wrapper/libcef_dll_wrapper.lib"
+            "${CEF_ROOT}/build/libcef_dll_wrapper/Release/libcef_dll_wrapper.lib"
         )
         set(_WRAPPER_EXT ".lib")
     elseif(APPLE)
@@ -132,8 +132,14 @@ else()
             message(FATAL_ERROR "Failed to configure CEF")
         endif()
         # Limit parallelism - CEF wrapper builds OOM with unlimited -j even on 16GB RAM
+        # Windows multi-config generators need --config Release
+        if(WIN32)
+            set(_CEF_BUILD_CMD ${CMAKE_COMMAND} --build build --target libcef_dll_wrapper --config Release -j2)
+        else()
+            set(_CEF_BUILD_CMD ${CMAKE_COMMAND} --build build --target libcef_dll_wrapper -j2)
+        endif()
         execute_process(
-            COMMAND ${CMAKE_COMMAND} --build build --target libcef_dll_wrapper -j2
+            COMMAND ${_CEF_BUILD_CMD}
             WORKING_DIRECTORY ${CEF_ROOT}
             RESULT_VARIABLE CEF_BUILD_RESULT
         )

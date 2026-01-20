@@ -2,7 +2,9 @@
 #include <mpv/client.h>
 #include <mpv/render.h>
 #include <mpv/render_gl.h>
+#ifdef __APPLE__
 #include <dlfcn.h>
+#endif
 #include <iostream>
 #include <clocale>
 #include <cmath>
