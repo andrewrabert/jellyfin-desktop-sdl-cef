@@ -4,6 +4,7 @@ build/
 # Third-party dependencies (except submodules)
 third_party/*
 !third_party/mpv
+!third_party/letsmove
 
 # IDE
 .vscode/

@@ -55,8 +55,8 @@ if(APPLE)
     )
 
     # LetsMove - prompts user to move app to /Applications (clears quarantine)
-    add_subdirectory(external/letsmove)
-    set(PLATFORM_INCLUDE_DIRS ${CMAKE_SOURCE_DIR}/external/letsmove)
+    add_subdirectory(third_party/letsmove)
+    set(PLATFORM_INCLUDE_DIRS ${CMAKE_SOURCE_DIR}/third_party/letsmove)
 
     set(PLATFORM_LIBRARIES
         ${COCOA_FRAMEWORK}
