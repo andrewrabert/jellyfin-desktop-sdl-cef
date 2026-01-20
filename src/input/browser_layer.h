@@ -98,7 +98,11 @@ public:
             case SDL_EVENT_TEXT_INPUT: {
                 int mods = getModifiers();
                 for (const char* c = event.text.text; *c; ++c) {
-                    receiver_->sendChar(static_cast<unsigned char>(*c), mods);
+                    unsigned char ch = static_cast<unsigned char>(*c);
+                    // Skip control characters - already handled by KEY_DOWN
+                    // (macOS generates TEXT_INPUT for Tab, Backspace, Delete, etc.)
+                    if (ch < 0x20 || ch == 0x7F) continue;
+                    receiver_->sendChar(ch, mods);
                 }
                 return true;
             }

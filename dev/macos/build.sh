@@ -44,6 +44,17 @@ cmake -B "${BUILD_DIR}" -G Ninja \
 echo "Building..."
 cmake --build "${BUILD_DIR}"
 
+# Create app bundle (required to run on macOS)
+echo "Creating app bundle..."
+OUTPUT_DIR="${BUILD_DIR}/output"
+cmake --install "${BUILD_DIR}" --prefix "${OUTPUT_DIR}"
+
+APP_DIR="${OUTPUT_DIR}/${APP_NAME}"
+if [ ! -d "${APP_DIR}" ]; then
+    echo "error: App bundle not created" >&2
+    exit 1
+fi
+
 echo ""
 echo "Build complete!"
-echo "Executable: ${BUILD_DIR}/jellyfin-desktop-cef"
+echo "Run: ${APP_DIR}"

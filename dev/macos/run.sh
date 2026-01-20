@@ -6,12 +6,14 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${0}")" && pwd)"
 . "${SCRIPT_DIR}/common.sh"
 
-EXECUTABLE="${BUILD_DIR}/jellyfin-desktop-cef"
+APP_DIR="${BUILD_DIR}/output/${APP_NAME}"
+EXECUTABLE="${APP_DIR}/Contents/MacOS/jellyfin-desktop-cef"
 
-# Check build exists
-if [ ! -f "${EXECUTABLE}" ]; then
-    echo "error: Build not found. Run build.sh first" >&2
+# Check app bundle exists
+if [ ! -d "${APP_DIR}" ]; then
+    echo "error: App bundle not found. Run build.sh first" >&2
     exit 1
 fi
 
-exec "${EXECUTABLE}" "${@}"
+# Run with stderr visible
+exec "${EXECUTABLE}" "${@}" 2>&1

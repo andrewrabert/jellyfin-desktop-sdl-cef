@@ -1,16 +1,13 @@
 #!/usr/bin/env sh
-# Jellyfin Desktop CEF - macOS bundling script
-# Run build.sh first
+# Jellyfin Desktop CEF - macOS bundle + DMG script
+# Creates distributable app bundle and DMG
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${0}")" && pwd)"
 . "${SCRIPT_DIR}/common.sh"
 
-# Check build exists
-if [ ! -f "${BUILD_DIR}/jellyfin-desktop-cef" ]; then
-    echo "error: Build not found. Run build.sh first" >&2
-    exit 1
-fi
+# Build first
+"${SCRIPT_DIR}/build.sh"
 
 # Determine version
 if [ -f "${PROJECT_ROOT}/VERSION" ]; then
@@ -20,20 +17,7 @@ else
 fi
 
 ARCH="$(uname -m)"
-OUTPUT_DIR="${BUILD_DIR}/output"
-
-echo "Creating app bundle via cmake install..."
-
-# Run cmake install to create the app bundle
-# This handles: copying files, fixing library paths, code signing
-cmake --install "${BUILD_DIR}" --prefix "${OUTPUT_DIR}"
-
-APP_DIR="${OUTPUT_DIR}/${APP_NAME}"
-
-if [ ! -d "${APP_DIR}" ]; then
-    echo "error: App bundle not created" >&2
-    exit 1
-fi
+APP_DIR="${BUILD_DIR}/output/${APP_NAME}"
 
 # Create DMG
 echo "Creating DMG..."
