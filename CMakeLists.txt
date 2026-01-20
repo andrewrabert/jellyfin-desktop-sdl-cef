@@ -348,7 +348,7 @@ endif()
 
 # macOS app bundle installation
 if(APPLE)
-    set(APP_NAME "Jellyfin Media Player.app")
+    set(APP_NAME "Jellyfin Desktop CEF.app")
     set(BUNDLE_CONTENTS "${CMAKE_INSTALL_PREFIX}/${APP_NAME}/Contents")
 
     # Install executable

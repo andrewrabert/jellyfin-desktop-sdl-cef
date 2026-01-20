@@ -1,4 +1,4 @@
-# Jellyfin Media Player - macOS bundle completion script
+# Jellyfin Desktop CEF - macOS bundle completion script
 # Configured by CMake, run during install to fix library paths
 
 set(app "${CMAKE_INSTALL_PREFIX}/@APP_NAME@")

@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Jellyfin Media Player - macOS bundling script
+# Jellyfin Desktop CEF - macOS bundling script
 # Run build.sh first
 set -eu
 
@@ -37,16 +37,16 @@ fi
 
 # Create DMG
 echo "Creating DMG..."
-DMG_NAME="JellyfinMediaPlayer-${VERSION}-macos-${ARCH}.dmg"
+DMG_NAME="JellyfinDesktopCEF-${VERSION}-macos-${ARCH}.dmg"
 rm -f "${BUILD_DIR}/${DMG_NAME}"
 
 # create-dmg returns non-zero if icon positioning fails (no icon), ignore that
 create-dmg \
-    --volname "Jellyfin Media Player v${VERSION}" \
+    --volname "Jellyfin Desktop CEF v${VERSION}" \
     --no-internet-enable \
     --window-size 500 300 \
     --icon-size 100 \
-    --icon "Jellyfin Media Player.app" 125 150 \
+    --icon "Jellyfin Desktop CEF.app" 125 150 \
     --app-drop-link 375 150 \
     "${BUILD_DIR}/${DMG_NAME}" "${APP_DIR}" || true
 

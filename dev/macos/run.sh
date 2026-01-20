@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Jellyfin Media Player - Run built app
+# Jellyfin Desktop CEF - Run built app
 # Run build.sh first
 set -eu
 

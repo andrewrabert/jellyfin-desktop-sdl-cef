@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Jellyfin Media Player - macOS build script
+# Jellyfin Desktop CEF - macOS build script
 # Run setup.sh first to install dependencies
 set -eu
 

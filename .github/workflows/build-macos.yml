@@ -81,14 +81,14 @@ jobs:
       - name: Create DMG
         run: |
           brew install create-dmg
-          APP_NAME="Jellyfin Media Player"
+          APP_NAME="Jellyfin Desktop CEF"
           VERSION="${{ steps.version.outputs.version }}"
           ARCH="${{ matrix.arch }}"
-          DMG_NAME="JellyfinMediaPlayer-${VERSION}-macos-${ARCH}.dmg"
+          DMG_NAME="JellyfinDesktopCEF-${VERSION}-macos-${ARCH}.dmg"
 
           # create-dmg returns non-zero if icon positioning fails (no icon), ignore that
           create-dmg \
-            --volname "Jellyfin Media Player v${VERSION}" \
+            --volname "Jellyfin Desktop CEF v${VERSION}" \
             --no-internet-enable \
             --window-size 500 300 \
             --icon-size 100 \
@@ -108,4 +108,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: macos-${{ matrix.arch }}
-          path: JellyfinMediaPlayer-*.dmg
+          path: JellyfinDesktopCEF-*.dmg
