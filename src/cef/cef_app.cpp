@@ -41,8 +41,9 @@ void App::OnBeforeCommandLineProcessing(const CefString& process_type,
 #ifdef __APPLE__
     // macOS: Use mock keychain to avoid system keychain prompts
     command_line->AppendSwitch("use-mock-keychain");
-    // Disable software rasterizer to avoid GPU process issues
-    command_line->AppendSwitch("disable-software-rasterizer");
+    // Single process mode - avoids Mach port rendezvous issues with ad-hoc signed app bundles
+    // The rendezvous service registration fails for ad-hoc signed apps in /Applications
+    command_line->AppendSwitch("single-process");
 #endif
 
     // Disable GPU rendering unless --gpu-overlay is specified

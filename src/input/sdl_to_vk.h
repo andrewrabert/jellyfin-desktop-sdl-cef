@@ -224,6 +224,25 @@ namespace kVK {
     constexpr int ANSI_R        = 0x0F;
     constexpr int ANSI_Y        = 0x10;
     constexpr int ANSI_T        = 0x11;
+    constexpr int ANSI_1        = 0x12;
+    constexpr int ANSI_2        = 0x13;
+    constexpr int ANSI_3        = 0x14;
+    constexpr int ANSI_4        = 0x15;
+    constexpr int ANSI_6        = 0x16;
+    constexpr int ANSI_5        = 0x17;
+    constexpr int ANSI_9        = 0x19;
+    constexpr int ANSI_7        = 0x1A;
+    constexpr int ANSI_8        = 0x1C;
+    constexpr int ANSI_0        = 0x1D;
+    constexpr int ANSI_O        = 0x1F;
+    constexpr int ANSI_U        = 0x20;
+    constexpr int ANSI_I        = 0x22;
+    constexpr int ANSI_P        = 0x23;
+    constexpr int ANSI_L        = 0x25;
+    constexpr int ANSI_J        = 0x26;
+    constexpr int ANSI_K        = 0x28;
+    constexpr int ANSI_N        = 0x2D;
+    constexpr int ANSI_M        = 0x2E;
     constexpr int Return        = 0x24;
     constexpr int Tab           = 0x30;
     constexpr int Space         = 0x31;
@@ -266,10 +285,31 @@ inline int sdlKeyToMacNative(int sdlKey) {
         case SDLK_F5:  return kVK::F5;
         case SDLK_F11: return kVK::F11;
 
-        // Letters (for shortcuts)
+        // Letters - must map ALL to avoid collisions with kVK codes
+        // (e.g., SDLK_S = 0x73 = kVK_Home without explicit mapping)
         case SDLK_A: return kVK::ANSI_A;
+        case SDLK_B: return kVK::ANSI_B;
         case SDLK_C: return kVK::ANSI_C;
+        case SDLK_D: return kVK::ANSI_D;
+        case SDLK_E: return kVK::ANSI_E;
+        case SDLK_F: return kVK::ANSI_F;
+        case SDLK_G: return kVK::ANSI_G;
+        case SDLK_H: return kVK::ANSI_H;
+        case SDLK_I: return kVK::ANSI_I;
+        case SDLK_J: return kVK::ANSI_J;
+        case SDLK_K: return kVK::ANSI_K;
+        case SDLK_L: return kVK::ANSI_L;
+        case SDLK_M: return kVK::ANSI_M;
+        case SDLK_N: return kVK::ANSI_N;
+        case SDLK_O: return kVK::ANSI_O;
+        case SDLK_P: return kVK::ANSI_P;
+        case SDLK_Q: return kVK::ANSI_Q;
+        case SDLK_R: return kVK::ANSI_R;
+        case SDLK_S: return kVK::ANSI_S;
+        case SDLK_T: return kVK::ANSI_T;
+        case SDLK_U: return kVK::ANSI_U;
         case SDLK_V: return kVK::ANSI_V;
+        case SDLK_W: return kVK::ANSI_W;
         case SDLK_X: return kVK::ANSI_X;
         case SDLK_Y: return kVK::ANSI_Y;
         case SDLK_Z: return kVK::ANSI_Z;

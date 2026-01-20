@@ -345,3 +345,60 @@ if(NOT EXTERNAL_MPV_DIR)
         )
     endif()
 endif()
+
+# macOS app bundle installation
+if(APPLE)
+    set(APP_NAME "Jellyfin Media Player.app")
+    set(BUNDLE_CONTENTS "${CMAKE_INSTALL_PREFIX}/${APP_NAME}/Contents")
+
+    # Install executable
+    install(PROGRAMS $<TARGET_FILE:jellyfin-desktop-cef>
+        DESTINATION "${APP_NAME}/Contents/MacOS"
+    )
+
+    # Install libmpv
+    install(FILES "${CMAKE_BINARY_DIR}/libmpv.2.dylib"
+        DESTINATION "${APP_NAME}/Contents/MacOS"
+    )
+
+    # Install CEF framework
+    install(DIRECTORY "${CMAKE_BINARY_DIR}/Frameworks/Chromium Embedded Framework.framework"
+        DESTINATION "${APP_NAME}/Contents/Frameworks"
+    )
+
+    # Install Info.plist (configure version)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/VERSION")
+        file(READ "${CMAKE_SOURCE_DIR}/VERSION" APP_VERSION)
+        string(STRIP "${APP_VERSION}" APP_VERSION)
+    else()
+        set(APP_VERSION "0.0.0")
+    endif()
+    configure_file(
+        "${CMAKE_SOURCE_DIR}/resources/macos/Info.plist.in"
+        "${CMAKE_BINARY_DIR}/Info.plist"
+        @ONLY
+    )
+    install(FILES "${CMAKE_BINARY_DIR}/Info.plist"
+        DESTINATION "${APP_NAME}/Contents"
+    )
+
+    # Install icon if exists
+    if(EXISTS "${CMAKE_SOURCE_DIR}/resources/macos/AppIcon.icns")
+        install(FILES "${CMAKE_SOURCE_DIR}/resources/macos/AppIcon.icns"
+            DESTINATION "${APP_NAME}/Contents/Resources"
+        )
+    endif()
+
+    # Create Resources directory (required even if empty)
+    install(DIRECTORY DESTINATION "${APP_NAME}/Contents/Resources")
+
+    # Configure bundle completion script
+    configure_file(
+        "${CMAKE_SOURCE_DIR}/cmake/CompleteBundleMac.cmake.in"
+        "${CMAKE_BINARY_DIR}/CompleteBundleMac.cmake"
+        @ONLY
+    )
+
+    # Run bundle completion (fixes library paths)
+    install(SCRIPT "${CMAKE_BINARY_DIR}/CompleteBundleMac.cmake")
+endif()

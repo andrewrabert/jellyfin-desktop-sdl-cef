@@ -238,8 +238,16 @@ int main(int argc, char* argv[]) {
     }
 
     // macOS: Load CEF framework dynamically (required - linking alone isn't enough)
-    // Framework is at Frameworks/ relative to executable (install_name fixed at build time)
-    std::string framework_lib = (exe_path / "Frameworks" /
+    // Check if running from app bundle (exe is in Contents/MacOS/) or dev build
+    std::filesystem::path cef_framework_path;
+    if (exe_path.parent_path().filename() == "Contents") {
+        // App bundle: framework is at ../Frameworks/
+        cef_framework_path = exe_path.parent_path() / "Frameworks";
+    } else {
+        // Dev build: framework is at ./Frameworks/
+        cef_framework_path = exe_path / "Frameworks";
+    }
+    std::string framework_lib = (cef_framework_path /
                                  "Chromium Embedded Framework.framework" /
                                  "Chromium Embedded Framework").string();
     std::cerr << "Loading CEF from: " << framework_lib << std::endl;
@@ -428,9 +436,8 @@ int main(int argc, char* argv[]) {
 #endif
 
 #ifdef __APPLE__
-    // macOS: Must set paths explicitly since we're not a proper .app bundle
-    std::filesystem::path framework_path = exe_path / "Frameworks" / "Chromium Embedded Framework.framework";
-    CefString(&settings.framework_dir_path).FromString(framework_path.string());
+    // macOS: Set framework path (cef_framework_path set earlier during CEF loading)
+    CefString(&settings.framework_dir_path).FromString((cef_framework_path / "Chromium Embedded Framework.framework").string());
     // Use main executable as subprocess - it handles CefExecuteProcess early
     CefString(&settings.browser_subprocess_path).FromString((exe_path / "jellyfin-desktop-cef").string());
 #else

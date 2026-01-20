@@ -37,7 +37,7 @@ jobs:
 
       - name: Install build tools
         run: |
-          brew install cmake ninja meson
+          brew install cmake ninja meson pkg-config
 
       - name: Install mpv dependencies
         run: |
@@ -76,115 +76,7 @@ jobs:
 
       - name: Create app bundle
         run: |
-          APP_NAME="Jellyfin Media Player"
-          APP_DIR="build/${APP_NAME}.app"
-          CONTENTS_DIR="${APP_DIR}/Contents"
-          MACOS_DIR="${CONTENTS_DIR}/MacOS"
-          RESOURCES_DIR="${CONTENTS_DIR}/Resources"
-          FRAMEWORKS_DIR="${CONTENTS_DIR}/Frameworks"
-
-          # Create bundle structure
-          mkdir -p "${MACOS_DIR}"
-          mkdir -p "${RESOURCES_DIR}"
-          mkdir -p "${FRAMEWORKS_DIR}"
-
-          # Copy executable
-          cp build/jellyfin-desktop-cef "${MACOS_DIR}/"
-
-          # Copy CEF framework
-          cp -R build/Frameworks/Chromium\ Embedded\ Framework.framework "${FRAMEWORKS_DIR}/"
-
-          # Copy libmpv
-          cp build/libmpv.2.dylib "${MACOS_DIR}/"
-
-          # Create Info.plist from template
-          VERSION="${{ steps.version.outputs.version }}"
-          sed "s/@VERSION@/${VERSION}/g" resources/macos/Info.plist.in > "${CONTENTS_DIR}/Info.plist"
-
-          # Copy icon if exists
-          if [ -f resources/macos/AppIcon.icns ]; then
-            cp resources/macos/AppIcon.icns "${RESOURCES_DIR}/"
-          fi
-
-          # Fix library paths for app bundle structure
-          # Update executable to find framework in bundle
-          install_name_tool -change \
-            "@executable_path/Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework" \
-            "@executable_path/../Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework" \
-            "${MACOS_DIR}/jellyfin-desktop-cef"
-
-          # Fix framework id for bundle location
-          install_name_tool -id \
-            "@executable_path/../Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework" \
-            "${FRAMEWORKS_DIR}/Chromium Embedded Framework.framework/Chromium Embedded Framework"
-
-      - name: Bundle brew dependencies for libmpv
-        run: |
-          APP_NAME="Jellyfin Media Player"
-          MACOS_DIR="build/${APP_NAME}.app/Contents/MacOS"
-          FRAMEWORKS_DIR="build/${APP_NAME}.app/Contents/Frameworks"
-
-          # Get list of dylibs that libmpv depends on (excluding system libs)
-          echo "Analyzing libmpv dependencies..."
-          otool -L "${MACOS_DIR}/libmpv.2.dylib" | grep -v '/System/' | grep -v '/usr/lib/' | grep -v '@' | awk '{print $1}' > /tmp/mpv_deps.txt
-
-          # Copy each dependency and fix paths
-          mkdir -p "${FRAMEWORKS_DIR}"
-          while IFS= read -r dep; do
-            if [ -f "$dep" ]; then
-              depname=$(basename "$dep")
-              echo "Bundling: $depname"
-              cp "$dep" "${FRAMEWORKS_DIR}/"
-              chmod 755 "${FRAMEWORKS_DIR}/${depname}"
-
-              # Fix the dependency reference in libmpv
-              install_name_tool -change "$dep" "@executable_path/../Frameworks/${depname}" "${MACOS_DIR}/libmpv.2.dylib"
-
-              # Fix the library's own id
-              install_name_tool -id "@executable_path/../Frameworks/${depname}" "${FRAMEWORKS_DIR}/${depname}"
-            fi
-          done < /tmp/mpv_deps.txt
-
-          # Recursively fix dependencies of dependencies (2 levels deep should suffice)
-          for lib in "${FRAMEWORKS_DIR}"/*.dylib; do
-            [ -f "$lib" ] || continue
-            libname=$(basename "$lib")
-            echo "Fixing transitive deps for: $libname"
-            otool -L "$lib" | grep -v '/System/' | grep -v '/usr/lib/' | grep -v '@' | awk '{print $1}' | while IFS= read -r dep; do
-              if [ -f "$dep" ]; then
-                depname=$(basename "$dep")
-                if [ ! -f "${FRAMEWORKS_DIR}/${depname}" ]; then
-                  echo "  Bundling transitive: $depname"
-                  cp "$dep" "${FRAMEWORKS_DIR}/"
-                  chmod 755 "${FRAMEWORKS_DIR}/${depname}"
-                  install_name_tool -id "@executable_path/../Frameworks/${depname}" "${FRAMEWORKS_DIR}/${depname}"
-                fi
-                install_name_tool -change "$dep" "@executable_path/../Frameworks/${depname}" "$lib"
-              fi
-            done
-          done
-
-          # Second pass for any remaining transitive deps
-          for lib in "${FRAMEWORKS_DIR}"/*.dylib; do
-            [ -f "$lib" ] || continue
-            otool -L "$lib" | grep -v '/System/' | grep -v '/usr/lib/' | grep -v '@' | awk '{print $1}' | while IFS= read -r dep; do
-              if [ -f "$dep" ]; then
-                depname=$(basename "$dep")
-                if [ ! -f "${FRAMEWORKS_DIR}/${depname}" ]; then
-                  echo "  Bundling (pass 2): $depname"
-                  cp "$dep" "${FRAMEWORKS_DIR}/"
-                  chmod 755 "${FRAMEWORKS_DIR}/${depname}"
-                  install_name_tool -id "@executable_path/../Frameworks/${depname}" "${FRAMEWORKS_DIR}/${depname}"
-                fi
-                install_name_tool -change "$dep" "@executable_path/../Frameworks/${depname}" "$lib"
-              fi
-            done
-          done
-
-      - name: Ad-hoc sign
-        run: |
-          APP_NAME="Jellyfin Media Player"
-          codesign --force --deep -s - "build/${APP_NAME}.app"
+          cmake --install build --prefix build/output
 
       - name: Create DMG
         run: |
@@ -202,7 +94,7 @@ jobs:
             --icon-size 100 \
             --icon "${APP_NAME}.app" 125 150 \
             --app-drop-link 375 150 \
-            "${DMG_NAME}" "build/${APP_NAME}.app" || true
+            "${DMG_NAME}" "build/output/${APP_NAME}.app" || true
 
           # Verify DMG was created
           if [ ! -f "${DMG_NAME}" ]; then

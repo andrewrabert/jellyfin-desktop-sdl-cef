@@ -548,6 +548,11 @@ void Client::sendKeyEvent(int key, bool down, int modifiers) {
     event.windows_key_code = sdlKeyToWindowsVK(key);
 #ifdef __APPLE__
     event.native_key_code = sdlKeyToMacNative(key);
+    // macOS: set character for printable keys
+    if (key >= 0x20 && key < 0x7F) {
+        event.character = key;
+        event.unmodified_character = key;
+    }
 #else
     event.native_key_code = key;
 #endif
