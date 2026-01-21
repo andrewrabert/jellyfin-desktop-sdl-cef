@@ -2,8 +2,12 @@
 // Must be initialized BEFORE SDL_Init for CEF compatibility
 
 #import <Cocoa/Cocoa.h>
+#import <Carbon/Carbon.h>  // For kCoreEventClass, kAEReopenApplication
 #include "include/cef_application_mac.h"
 #include <SDL3/SDL.h>
+
+// Store main window reference for dock click handling
+static NSWindow* g_mainWindow = nil;
 
 @interface JellyfinApplication : NSApplication <CefAppProtocol> {
     BOOL handlingSendEvent_;
@@ -11,6 +15,25 @@
 @end
 
 @implementation JellyfinApplication
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        // Register for reopen Apple Event (dock icon click)
+        [[NSAppleEventManager sharedAppleEventManager]
+            setEventHandler:self
+                andSelector:@selector(handleReopenEvent:withReplyEvent:)
+              forEventClass:kCoreEventClass
+                 andEventID:kAEReopenApplication];
+    }
+    return self;
+}
+
+- (void)handleReopenEvent:(NSAppleEventDescriptor*)event withReplyEvent:(NSAppleEventDescriptor*)reply {
+    if (g_mainWindow && [g_mainWindow isMiniaturized]) {
+        [g_mainWindow deminiaturize:nil];
+    }
+}
 
 - (BOOL)isHandlingSendEvent {
     return handlingSendEvent_;
@@ -64,5 +87,7 @@ void activateMacWindow(SDL_Window* window) {
         props, SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, nullptr);
     if (ns_window) {
         [ns_window makeKeyAndOrderFront:nil];
+        // Store for dock click handling
+        g_mainWindow = ns_window;
     }
 }
