@@ -751,6 +751,7 @@ int main(int argc, char* argv[]) {
     OverlayState overlay_state = OverlayState::SHOWING;
     std::chrono::steady_clock::time_point overlay_fade_start;
     float overlay_browser_alpha = 1.0f;
+    float clear_color = 16.0f / 255.0f;  // #101010 until fade begins
     std::string pending_server_url;
 
     // Context menu overlay
@@ -1494,6 +1495,7 @@ int main(int argc, char* argv[]) {
             auto elapsed = std::chrono::duration<float>(now - overlay_fade_start).count();
             if (elapsed >= OVERLAY_FADE_DELAY_SEC) {
                 overlay_state = OverlayState::FADING;
+                clear_color = 0.0f;  // Switch to black background
                 // Switch input from overlay to main browser
                 window_state.remove(active_browser);
                 active_browser->onFocusLost();
@@ -1566,8 +1568,8 @@ int main(int argc, char* argv[]) {
         flushPaintBuffer();
         compositor.flushOverlay();
 
-        // Clear to black
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        // Clear to background color
+        glClearColor(clear_color, clear_color, clear_color, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
         // Render video first (underneath the browser UI)
@@ -1621,19 +1623,19 @@ int main(int argc, char* argv[]) {
             flushPaintBuffer();
             compositor.flushOverlay();
 
-            // Clear main surface (transparent when video ready, black otherwise)
+            // Clear main surface (transparent when video ready, bg color otherwise)
             glViewport(0, 0, viewport_w, viewport_h);
             float bg_alpha = video_ready ? 0.0f : 1.0f;
-            glClearColor(0.0f, 0.0f, 0.0f, bg_alpha);
+            glClearColor(clear_color, clear_color, clear_color, bg_alpha);
             glClear(GL_COLOR_BUFFER_BIT);
         } else {
             // X11: OpenGL composition (like Windows) - render video and CEF to same surface
             flushPaintBuffer();
             compositor.flushOverlay();
 
-            // Clear to black
+            // Clear to background color
             glViewport(0, 0, viewport_w, viewport_h);
-            glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+            glClearColor(clear_color, clear_color, clear_color, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
 
             // Render video first (underneath the browser UI)
