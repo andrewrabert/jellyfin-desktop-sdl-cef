@@ -58,10 +58,6 @@ void activateMacWindow(SDL_Window* window);
 #include "ui/menu_overlay.h"
 #include "settings.h"
 
-// Fade constants
-constexpr float FADE_DURATION_SEC = 0.3f;
-constexpr float IDLE_TIMEOUT_SEC = 5.0f;
-
 // Overlay fade constants
 constexpr float OVERLAY_FADE_DELAY_SEC = 1.0f;
 constexpr float OVERLAY_FADE_DURATION_SEC = 0.25f;
@@ -947,8 +943,6 @@ int main(int argc, char* argv[]) {
     window_state.add(useWayland ? static_cast<WindowStateListener*>(&mpv_layer_vk) : static_cast<WindowStateListener*>(&mpv_layer_gl));
 #endif
 
-    auto last_activity = Clock::now();
-    float overlay_alpha = 1.0f;
     bool focus_set = false;
     int current_width = width;
     int current_height = height;
@@ -1132,7 +1126,6 @@ int main(int argc, char* argv[]) {
         int* current_height;
         bool* has_subsurface;
         bool* has_video;
-        float* overlay_alpha;
         float* overlay_browser_alpha;
         OverlayState* overlay_state;
         // Paint buffer access for main browser
@@ -1152,7 +1145,6 @@ int main(int argc, char* argv[]) {
         &current_height,
         &has_subsurface,
         &has_video,
-        &overlay_alpha,
         &overlay_browser_alpha,
         &overlay_state,
         &paint_buffers,
@@ -1212,7 +1204,7 @@ int main(int argc, char* argv[]) {
 
             // Composite browser content
             if (ctx->compositor->hasValidOverlay() || ctx->compositor->hasPendingContent()) {
-                ctx->compositor->composite(*ctx->current_width, *ctx->current_height, *ctx->overlay_alpha);
+                ctx->compositor->composite(*ctx->current_width, *ctx->current_height, 1.0f);
             }
 
             if (*ctx->overlay_state != OverlayState::HIDDEN && *ctx->overlay_browser_alpha > 0.01f) {
@@ -1434,10 +1426,6 @@ int main(int argc, char* argv[]) {
         needs_render = activity_this_frame || has_video || compositor.hasPendingContent() || compositor.hasPendingDmaBuf() || overlay_state == OverlayState::FADING;
 #endif
 
-        if (activity_this_frame) {
-            last_activity = now;
-        }
-
         // Process player commands
         {
             std::lock_guard<std::mutex> lock(cmd_mutex);
@@ -1631,15 +1619,6 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Calculate fade
-        float idle_sec = std::chrono::duration<float>(now - last_activity).count();
-        if (idle_sec < IDLE_TIMEOUT_SEC) {
-            overlay_alpha = 1.0f;
-        } else {
-            float fade_progress = (idle_sec - IDLE_TIMEOUT_SEC) / FADE_DURATION_SEC;
-            overlay_alpha = (std::max)(0.0f, 1.0f - fade_progress);
-        }
-
         // Menu overlay blending
         menu.clearRedraw();
 
@@ -1663,8 +1642,7 @@ int main(int argc, char* argv[]) {
         // Composite main browser (Metal handles its own presentation)
         // Always call composite() - it handles "no content yet" internally and uploads staging data
         if (test_video.empty() && (compositor.hasValidOverlay() || compositor.hasPendingContent())) {
-            float alpha = video_ready ? overlay_alpha : 1.0f;
-            compositor.composite(current_width, current_height, alpha);
+            compositor.composite(current_width, current_height, 1.0f);
         }
 
         // Composite overlay browser (with fade alpha)
@@ -1691,8 +1669,7 @@ int main(int argc, char* argv[]) {
 
         // Composite main browser on top of video
         if (test_video.empty() && compositor.hasValidOverlay()) {
-            float alpha = video_ready ? overlay_alpha : 1.0f;
-            compositor.composite(current_width, current_height, alpha);
+            compositor.composite(current_width, current_height, 1.0f);
         }
 
         // Composite overlay browser (with fade alpha)
@@ -1758,8 +1735,7 @@ int main(int argc, char* argv[]) {
 
         // Composite main browser (always full opacity when no video)
         if (test_video.empty() && compositor.hasValidOverlay()) {
-            float alpha = video_ready ? overlay_alpha : 1.0f;
-            compositor.composite(viewport_w, viewport_h, alpha);
+            compositor.composite(viewport_w, viewport_h, 1.0f);
         }
 
         // Composite overlay browser (with fade alpha)
