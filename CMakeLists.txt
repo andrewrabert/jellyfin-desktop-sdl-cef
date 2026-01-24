@@ -258,6 +258,7 @@ add_custom_target(embedded_resources DEPENDS ${EMBEDDED_RESOURCES_HEADER})
 # Common sources for all platforms
 set(COMMON_SOURCES
     src/main.cpp
+    src/logging.cpp
     src/cef/cef_app.cpp
     src/cef/cef_client.cpp
     src/cef/resource_handler.cpp

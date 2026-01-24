@@ -1,6 +1,6 @@
 #include "player/macos/media_session_macos.h"
 #include <dlfcn.h>
-#include <iostream>
+#include "logging.h"
 
 #import <AppKit/AppKit.h>
 #import <MediaPlayer/MediaPlayer.h>
@@ -111,7 +111,7 @@ MacOSMediaBackend::MacOSMediaBackend(MediaSession* session) : session_(session) 
             SetCanBeNowPlayingApplication_(1);
         }
     } else {
-        std::cerr << "[macOS Media] Failed to load MediaRemote.framework" << std::endl;
+        LOG_ERROR(LOG_MEDIA, "macOS Media: Failed to load MediaRemote.framework");
     }
 }
 

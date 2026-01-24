@@ -2,9 +2,9 @@
 #include <mpv/client.h>
 #include <mpv/render.h>
 #include <mpv/render_vk.h>
-#include <iostream>
 #include <clocale>
 #include <cmath>
+#include "logging.h"
 
 MpvPlayerVk::MpvPlayerVk() = default;
 
@@ -79,7 +79,7 @@ void MpvPlayerVk::handleMpvEvent(mpv_event* event) {
             } else if (strcmp(prop->name, "eof-reached") == 0 && prop->format == MPV_FORMAT_FLAG) {
                 bool eof = *static_cast<int*>(prop->data) != 0;
                 if (eof && playing_) {
-                    std::cerr << "[MPV] eof-reached=true, track ended naturally" << std::endl;
+                    LOG_DEBUG(LOG_MPV, "eof-reached=true, track ended naturally");
                     playing_ = false;
                     if (on_finished_) on_finished_();
                 }
@@ -127,7 +127,7 @@ void MpvPlayerVk::handleMpvEvent(mpv_event* event) {
             break;
         case MPV_EVENT_END_FILE: {
             mpv_event_end_file* ef = static_cast<mpv_event_end_file*>(event->data);
-            std::cerr << "[MPV] END_FILE reason=" << ef->reason << " (0=EOF, 2=STOP, 4=ERROR)" << std::endl;
+            LOG_DEBUG(LOG_MPV, "END_FILE reason=%d (0=EOF, 2=STOP, 4=ERROR)", ef->reason);
             // With keep-open=yes, EOF reason won't fire (handled by eof-reached property)
             // STOP reason fires on explicit stop command
             if (ef->reason == MPV_END_FILE_REASON_STOP) {
@@ -136,7 +136,7 @@ void MpvPlayerVk::handleMpvEvent(mpv_event* event) {
             } else if (ef->reason == MPV_END_FILE_REASON_ERROR) {
                 playing_ = false;
                 std::string error = mpv_error_string(ef->error);
-                std::cerr << "[MPV] Playback error: " << error << std::endl;
+                LOG_ERROR(LOG_MPV, "Playback error: %s", error.c_str());
                 if (on_error_) on_error_(error);
             }
             // Note: EOF/QUIT/REDIRECT reasons are handled by eof-reached property observation
@@ -149,12 +149,11 @@ void MpvPlayerVk::handleMpvEvent(mpv_event* event) {
             if (!text.empty() && text.back() == '\n') {
                 text.pop_back();
             }
-            // Format: [MPV] prefix: message
-            std::cerr << "[MPV] " << msg->prefix << ": " << text << std::endl;
+            LOG_DEBUG(LOG_MPV, "%s: %s", msg->prefix, text.c_str());
             break;
         }
         default:
-            std::cerr << "[MPV] Unhandled event: " << mpv_event_name(event->event_id) << std::endl;
+            LOG_DEBUG(LOG_MPV, "Unhandled event: %s", mpv_event_name(event->event_id));
             break;
     }
 }
@@ -167,7 +166,7 @@ bool MpvPlayerVk::init(VulkanContext* vk, VideoSurface* subsurface) {
 
     mpv_ = mpv_create();
     if (!mpv_) {
-        std::cerr << "mpv_create failed" << std::endl;
+        LOG_ERROR(LOG_MPV, "mpv_create failed");
         return false;
     }
 
@@ -192,7 +191,7 @@ bool MpvPlayerVk::init(VulkanContext* vk, VideoSurface* subsurface) {
         mpv_set_option_string(mpv_, "tone-mapping", "clip");
         double peak = 1000.0;  // EDR headroom
         mpv_set_option(mpv_, "target-peak", MPV_FORMAT_DOUBLE, &peak);
-        std::cerr << "mpv HDR output enabled (bt.709/linear for macOS EDR)" << std::endl;
+        LOG_INFO(LOG_MPV, "HDR output enabled (bt.709/linear for macOS EDR)");
 #else
         // Linux Wayland HDR uses PQ/BT.2020
         mpv_set_option_string(mpv_, "target-prim", "bt.2020");
@@ -201,12 +200,12 @@ bool MpvPlayerVk::init(VulkanContext* vk, VideoSurface* subsurface) {
         mpv_set_option_string(mpv_, "tone-mapping", "clip");  // No tone mapping for passthrough
         double peak = 1000.0;
         mpv_set_option(mpv_, "target-peak", MPV_FORMAT_DOUBLE, &peak);
-        std::cerr << "mpv HDR output enabled (bt.2020/pq/1000 nits)" << std::endl;
+        LOG_INFO(LOG_MPV, "HDR output enabled (bt.2020/pq/1000 nits)");
 #endif
     }
 
     if (mpv_initialize(mpv_) < 0) {
-        std::cerr << "mpv_initialize failed" << std::endl;
+        LOG_ERROR(LOG_MPV, "mpv_initialize failed");
         return false;
     }
 
@@ -240,7 +239,7 @@ bool MpvPlayerVk::init(VulkanContext* vk, VideoSurface* subsurface) {
         vk_params.features = subsurface_->features();
         vk_params.extensions = subsurface_->deviceExtensions();
         vk_params.num_extensions = subsurface_->deviceExtensionCount();
-        std::cerr << "mpv using subsurface's Vulkan device for HDR" << std::endl;
+        LOG_INFO(LOG_MPV, "Using subsurface's Vulkan device for HDR");
     } else {
         // Use main VulkanContext
         vk_params.instance = vk_->instance();
@@ -271,20 +270,20 @@ bool MpvPlayerVk::init(VulkanContext* vk, VideoSurface* subsurface) {
 
         result = mpv_render_context_create(&render_ctx_, mpv_, params);
         if (result >= 0) {
-            std::cerr << "mpv using backend: " << backend << std::endl;
+            LOG_INFO(LOG_MPV, "Using backend: %s", backend);
             break;
         }
-        std::cerr << "mpv backend '" << backend << "' failed: " << mpv_error_string(result) << std::endl;
+        LOG_WARN(LOG_MPV, "Backend '%s' failed: %s", backend, mpv_error_string(result));
     }
 
     if (result < 0) {
-        std::cerr << "mpv_render_context_create failed (all backends)" << std::endl;
+        LOG_ERROR(LOG_MPV, "mpv_render_context_create failed (all backends)");
         return false;
     }
 
     mpv_render_context_set_update_callback(render_ctx_, onMpvRedraw, this);
 
-    std::cerr << "mpv Vulkan render context created" << std::endl;
+    LOG_INFO(LOG_MPV, "Vulkan render context created");
     return true;
 }
 
@@ -308,7 +307,7 @@ bool MpvPlayerVk::loadFile(const std::string& path, double startSeconds) {
     if (ret >= 0) {
         playing_ = true;
     } else {
-        std::cerr << "[MPV] loadFile async failed: " << mpv_error_string(ret) << std::endl;
+        LOG_ERROR(LOG_MPV, "loadFile async failed: %s", mpv_error_string(ret));
     }
     return ret >= 0;
 }
@@ -367,7 +366,7 @@ void MpvPlayerVk::setNormalizationGain(double gainDb) {
         char filter[64];
         snprintf(filter, sizeof(filter), "lavfi=[volume=%.2fdB]", gainDb);
         mpv_set_property_string(mpv_, "af", filter);
-        std::cerr << "[mpv] Normalization gain: " << gainDb << " dB" << std::endl;
+        LOG_INFO(LOG_MPV, "Normalization gain: %.2f dB", gainDb);
     }
 }
 

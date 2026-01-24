@@ -5,9 +5,9 @@
 #ifdef __APPLE__
 #include <dlfcn.h>
 #endif
-#include <iostream>
 #include <clocale>
 #include <cmath>
+#include "logging.h"
 
 MpvPlayerGL::MpvPlayerGL() = default;
 
@@ -80,7 +80,7 @@ void MpvPlayerGL::handleMpvEvent(mpv_event* event) {
             } else if (strcmp(prop->name, "eof-reached") == 0 && prop->format == MPV_FORMAT_FLAG) {
                 bool eof = *static_cast<int*>(prop->data) != 0;
                 if (eof && playing_) {
-                    std::cerr << "[MPV-GL] eof-reached=true, track ended naturally" << std::endl;
+                    LOG_DEBUG(LOG_MPV, "eof-reached=true, track ended naturally");
                     playing_ = false;
                     if (on_finished_) on_finished_();
                 }
@@ -127,14 +127,14 @@ void MpvPlayerGL::handleMpvEvent(mpv_event* event) {
             break;
         case MPV_EVENT_END_FILE: {
             mpv_event_end_file* ef = static_cast<mpv_event_end_file*>(event->data);
-            std::cerr << "[MPV-GL] END_FILE reason=" << ef->reason << std::endl;
+            LOG_DEBUG(LOG_MPV, "END_FILE reason=%d", ef->reason);
             if (ef->reason == MPV_END_FILE_REASON_STOP) {
                 playing_ = false;
                 if (on_canceled_) on_canceled_();
             } else if (ef->reason == MPV_END_FILE_REASON_ERROR) {
                 playing_ = false;
                 std::string error = mpv_error_string(ef->error);
-                std::cerr << "[MPV-GL] Playback error: " << error << std::endl;
+                LOG_ERROR(LOG_MPV, "Playback error: %s", error.c_str());
                 if (on_error_) on_error_(error);
             }
             break;
@@ -145,7 +145,7 @@ void MpvPlayerGL::handleMpvEvent(mpv_event* event) {
             if (!text.empty() && text.back() == '\n') {
                 text.pop_back();
             }
-            std::cerr << "[mpv/" << msg->prefix << "] " << text << std::endl;
+            LOG_DEBUG(LOG_MPV, "[%s] %s", msg->prefix, text.c_str());
             break;
         }
         default:
@@ -175,7 +175,7 @@ bool MpvPlayerGL::init(GLContext* gl) {
 
     mpv_ = mpv_create();
     if (!mpv_) {
-        std::cerr << "mpv_create failed" << std::endl;
+        LOG_ERROR(LOG_MPV, "mpv_create failed");
         return false;
     }
 
@@ -189,7 +189,7 @@ bool MpvPlayerGL::init(GLContext* gl) {
     mpv_set_option_string(mpv_, "audio-fallback-to-null", "yes");
 
     if (mpv_initialize(mpv_) < 0) {
-        std::cerr << "mpv_initialize failed" << std::endl;
+        LOG_ERROR(LOG_MPV, "mpv_initialize failed");
         return false;
     }
 
@@ -226,10 +226,10 @@ bool MpvPlayerGL::init(GLContext* gl) {
 
     int result = mpv_render_context_create(&render_ctx_, mpv_, params);
     if (result < 0) {
-        std::cerr << "mpv_render_context_create (OpenGL/" << backend << ") failed: " << mpv_error_string(result) << std::endl;
+        LOG_ERROR(LOG_MPV, "mpv_render_context_create (OpenGL/%s) failed: %s", backend, mpv_error_string(result));
         return false;
     }
-    std::cerr << "mpv OpenGL using backend: " << backend << std::endl;
+    LOG_INFO(LOG_MPV, "mpv OpenGL using backend: %s", backend);
 
     mpv_render_context_set_update_callback(render_ctx_, onMpvRedraw, this);
     return true;
@@ -251,7 +251,7 @@ bool MpvPlayerGL::loadFile(const std::string& path, double startSeconds) {
     if (ret >= 0) {
         playing_ = true;
     } else {
-        std::cerr << "[MPV-GL] loadFile async failed: " << mpv_error_string(ret) << std::endl;
+        LOG_ERROR(LOG_MPV, "loadFile async failed: %s", mpv_error_string(ret));
     }
     return ret >= 0;
 }
@@ -307,7 +307,7 @@ void MpvPlayerGL::setNormalizationGain(double gainDb) {
         char filter[64];
         snprintf(filter, sizeof(filter), "lavfi=[volume=%.2fdB]", gainDb);
         mpv_set_property_string(mpv_, "af", filter);
-        std::cerr << "[mpv] Normalization gain: " << gainDb << " dB" << std::endl;
+        LOG_INFO(LOG_MPV, "Normalization gain: %.2f dB", gainDb);
     }
 }
 

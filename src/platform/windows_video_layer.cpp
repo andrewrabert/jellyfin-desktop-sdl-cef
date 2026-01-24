@@ -2,7 +2,7 @@
 
 #include "platform/windows_video_layer.h"
 #include <SDL3/SDL.h>
-#include <iostream>
+#include "logging.h"
 #include <algorithm>
 #include <vector>
 
@@ -51,7 +51,7 @@ bool WindowsVideoLayer::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
     SDL_PropertiesID props = SDL_GetWindowProperties(window);
     parent_hwnd_ = (HWND)SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
     if (!parent_hwnd_) {
-        std::cerr << "[WindowsVideoLayer] Failed to get parent HWND from SDL" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "[WindowsVideoLayer] Failed to get parent HWND from SDL");
         return false;
     }
 
@@ -65,7 +65,7 @@ bool WindowsVideoLayer::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
         wc.lpszClassName = VIDEO_WINDOW_CLASS;
         if (!RegisterClassExW(&wc)) {
-            std::cerr << "[WindowsVideoLayer] Failed to register video window class" << std::endl;
+            LOG_ERROR(LOG_PLATFORM, "[WindowsVideoLayer] Failed to register video window class");
             return false;
         }
         s_classRegistered = true;
@@ -91,7 +91,7 @@ bool WindowsVideoLayer::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
     );
 
     if (!video_hwnd_) {
-        std::cerr << "[WindowsVideoLayer] Failed to create video child window: " << GetLastError() << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "[WindowsVideoLayer] Failed to create video child window: %lu", GetLastError());
         return false;
     }
 
@@ -99,7 +99,7 @@ bool WindowsVideoLayer::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
     SetWindowPos(video_hwnd_, HWND_BOTTOM, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
-    std::cerr << "[WindowsVideoLayer] Video child window created: " << w << "x" << h << std::endl;
+    LOG_INFO(LOG_PLATFORM, "[WindowsVideoLayer] Video child window created: %dx%d", w, h);
 
     // Create Vulkan instance
     const char* instanceExts[] = {
@@ -120,7 +120,7 @@ bool WindowsVideoLayer::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
     instanceInfo.ppEnabledExtensionNames = instanceExts;
 
     if (vkCreateInstance(&instanceInfo, nullptr, &instance_) != VK_SUCCESS) {
-        std::cerr << "[WindowsVideoLayer] Failed to create Vulkan instance" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "[WindowsVideoLayer] Failed to create Vulkan instance");
         return false;
     }
 
@@ -128,7 +128,7 @@ bool WindowsVideoLayer::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
     uint32_t gpuCount = 0;
     vkEnumeratePhysicalDevices(instance_, &gpuCount, nullptr);
     if (gpuCount == 0) {
-        std::cerr << "[WindowsVideoLayer] No Vulkan devices found" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "[WindowsVideoLayer] No Vulkan devices found");
         return false;
     }
     std::vector<VkPhysicalDevice> gpus(gpuCount);
@@ -137,7 +137,7 @@ bool WindowsVideoLayer::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
 
     VkPhysicalDeviceProperties gpuProps;
     vkGetPhysicalDeviceProperties(physical_device_, &gpuProps);
-    std::cerr << "[WindowsVideoLayer] Using GPU: " << gpuProps.deviceName << std::endl;
+    LOG_INFO(LOG_PLATFORM, "[WindowsVideoLayer] Using GPU: %s", gpuProps.deviceName);
 
     // Find graphics queue family
     uint32_t queueFamilyCount = 0;
@@ -186,7 +186,7 @@ bool WindowsVideoLayer::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
     deviceInfo.ppEnabledExtensionNames = s_deviceExtensions;
 
     if (vkCreateDevice(physical_device_, &deviceInfo, nullptr, &device_) != VK_SUCCESS) {
-        std::cerr << "[WindowsVideoLayer] Failed to create Vulkan device" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "[WindowsVideoLayer] Failed to create Vulkan device");
         return false;
     }
 
@@ -204,11 +204,11 @@ bool WindowsVideoLayer::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
         vkGetInstanceProcAddr(instance_, "vkCreateWin32SurfaceKHR");
     if (!vkCreateWin32SurfaceKHR ||
         vkCreateWin32SurfaceKHR(instance_, &surfaceInfo, nullptr, &surface_) != VK_SUCCESS) {
-        std::cerr << "[WindowsVideoLayer] Failed to create Vulkan Win32 surface" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "[WindowsVideoLayer] Failed to create Vulkan Win32 surface");
         return false;
     }
 
-    std::cerr << "[WindowsVideoLayer] Vulkan context initialized" << std::endl;
+    LOG_INFO(LOG_PLATFORM, "[WindowsVideoLayer] Vulkan context initialized");
     return true;
 }
 
@@ -235,14 +235,14 @@ bool WindowsVideoLayer::createSwapchain(uint32_t width, uint32_t height) {
                 format_ = fmt.format;
                 color_space_ = fmt.colorSpace;
                 is_hdr_ = true;
-                std::cerr << "[WindowsVideoLayer] Using HDR format " << fmt.format << std::endl;
+                LOG_INFO(LOG_PLATFORM, "[WindowsVideoLayer] Using HDR format %d", fmt.format);
                 break;
             }
         }
     }
 
     if (!is_hdr_) {
-        std::cerr << "[WindowsVideoLayer] HDR not available, using SDR" << std::endl;
+        LOG_INFO(LOG_PLATFORM, "[WindowsVideoLayer] HDR not available, using SDR");
     }
 
     // Get surface capabilities
@@ -267,7 +267,7 @@ bool WindowsVideoLayer::createSwapchain(uint32_t width, uint32_t height) {
     swapInfo.oldSwapchain = swapchain_;
 
     if (vkCreateSwapchainKHR(device_, &swapInfo, nullptr, &swapchain_) != VK_SUCCESS) {
-        std::cerr << "[WindowsVideoLayer] Failed to create swapchain" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "[WindowsVideoLayer] Failed to create swapchain");
         return false;
     }
 
@@ -286,7 +286,7 @@ bool WindowsVideoLayer::createSwapchain(uint32_t width, uint32_t height) {
         viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
         if (vkCreateImageView(device_, &viewInfo, nullptr, &image_views_[i]) != VK_SUCCESS) {
-            std::cerr << "[WindowsVideoLayer] Failed to create image view " << i << std::endl;
+            LOG_ERROR(LOG_PLATFORM, "[WindowsVideoLayer] Failed to create image view %u", i);
             return false;
         }
     }
@@ -302,8 +302,8 @@ bool WindowsVideoLayer::createSwapchain(uint32_t width, uint32_t height) {
         vkCreateFence(device_, &fenceInfo, nullptr, &acquire_fence_);
     }
 
-    std::cerr << "[WindowsVideoLayer] Swapchain created: " << width << "x" << height
-              << " format=" << format_ << " HDR=" << (is_hdr_ ? "yes" : "no") << std::endl;
+    LOG_INFO(LOG_PLATFORM, "[WindowsVideoLayer] Swapchain created: %ux%u format=%d HDR=%s",
+             width, height, format_, is_hdr_ ? "yes" : "no");
 
     return true;
 }

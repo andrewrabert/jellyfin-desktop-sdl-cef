@@ -1,7 +1,7 @@
 #ifdef _WIN32
 
 #include "context/wgl_context.h"
-#include <iostream>
+#include "logging.h"
 
 WGLContext::WGLContext() = default;
 
@@ -16,13 +16,13 @@ bool WGLContext::init(SDL_Window* window) {
     SDL_PropertiesID props = SDL_GetWindowProperties(window);
     hwnd_ = (HWND)SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
     if (!hwnd_) {
-        std::cerr << "[WGL] Failed to get HWND from SDL window" << std::endl;
+        LOG_ERROR(LOG_GL, "[WGL] Failed to get HWND from SDL window");
         return false;
     }
 
     hdc_ = GetDC(hwnd_);
     if (!hdc_) {
-        std::cerr << "[WGL] Failed to get DC" << std::endl;
+        LOG_ERROR(LOG_GL, "[WGL] Failed to get DC");
         return false;
     }
 
@@ -39,14 +39,14 @@ bool WGLContext::init(SDL_Window* window) {
 
     int pixelFormat = ChoosePixelFormat(hdc_, &pfd);
     if (!pixelFormat || !SetPixelFormat(hdc_, pixelFormat, &pfd)) {
-        std::cerr << "[WGL] Failed to set pixel format" << std::endl;
+        LOG_ERROR(LOG_GL, "[WGL] Failed to set pixel format");
         return false;
     }
 
     // Create OpenGL context
     hglrc_ = wglCreateContext(hdc_);
     if (!hglrc_) {
-        std::cerr << "[WGL] Failed to create WGL context" << std::endl;
+        LOG_ERROR(LOG_GL, "[WGL] Failed to create WGL context");
         return false;
     }
 
@@ -55,9 +55,9 @@ bool WGLContext::init(SDL_Window* window) {
     // Get window size
     SDL_GetWindowSize(window, &width_, &height_);
 
-    std::cerr << "[WGL] Context created successfully" << std::endl;
-    std::cerr << "[WGL] GL_VERSION: " << glGetString(GL_VERSION) << std::endl;
-    std::cerr << "[WGL] GL_RENDERER: " << glGetString(GL_RENDERER) << std::endl;
+    LOG_INFO(LOG_GL, "[WGL] Context created successfully");
+    LOG_INFO(LOG_GL, "[WGL] GL_VERSION: %s", glGetString(GL_VERSION));
+    LOG_INFO(LOG_GL, "[WGL] GL_RENDERER: %s", glGetString(GL_RENDERER));
 
     return true;
 }

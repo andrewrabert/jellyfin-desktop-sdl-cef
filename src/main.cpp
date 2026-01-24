@@ -1,8 +1,9 @@
 #include <SDL3/SDL.h>
-#include <iostream>
 #include <filesystem>
+#include "logging.h"
 #include <vector>
 #include <cstring>
+#include <cstdlib>
 #include <mutex>
 #include <condition_variable>
 #include <thread>
@@ -232,6 +233,25 @@ MediaMetadata parseMetadataJson(const std::string& json) {
 }
 
 int main(int argc, char* argv[]) {
+    // Pre-parse logging args before anything else (so early logs work)
+    {
+        SDL_LogPriority log_level = SDL_LOG_PRIORITY_INFO;
+        for (int i = 1; i < argc; i++) {
+            if (strcmp(argv[i], "--log-level") == 0 && i + 1 < argc) {
+                int level = parseLogLevel(argv[++i]);
+                if (level >= 0) log_level = static_cast<SDL_LogPriority>(level);
+            } else if (strncmp(argv[i], "--log-level=", 12) == 0) {
+                int level = parseLogLevel(argv[i] + 12);
+                if (level >= 0) log_level = static_cast<SDL_LogPriority>(level);
+            } else if (strcmp(argv[i], "--log-file") == 0 && i + 1 < argc) {
+                g_log_file = fopen(argv[++i], "a");
+            } else if (strncmp(argv[i], "--log-file=", 11) == 0) {
+                g_log_file = fopen(argv[i] + 11, "a");
+            }
+        }
+        initLogging(log_level);
+    }
+
 #ifdef __APPLE__
     // macOS: Get executable path early for CEF framework loading
     char exe_buf[PATH_MAX];
@@ -256,30 +276,82 @@ int main(int argc, char* argv[]) {
     std::string framework_lib = (cef_framework_path /
                                  "Chromium Embedded Framework.framework" /
                                  "Chromium Embedded Framework").string();
-    std::cerr << "Loading CEF from: " << framework_lib << std::endl;
+    LOG_INFO(LOG_CEF, "Loading CEF from: %s", framework_lib.c_str());
     if (!cef_load_library(framework_lib.c_str())) {
-        std::cerr << "Failed to load CEF framework from: " << framework_lib << std::endl;
+        LOG_ERROR(LOG_CEF, "Failed to load CEF framework from: %s", framework_lib.c_str());
         return 1;
     }
-    std::cerr << "CEF framework loaded" << std::endl;
+    LOG_INFO(LOG_CEF, "CEF framework loaded");
 
     // CRITICAL: Initialize CEF-compatible NSApplication BEFORE CefExecuteProcess
     // This must happen before any CEF code that might create an NSApplication
     initMacApplication();
 #endif
 
-    // Parse CLI args
+    // CEF subprocesses inherit this env var - skip our arg parsing
+    bool is_cef_subprocess = (getenv("JELLYFIN_CEF_SUBPROCESS") != nullptr);
+
+    // Parse CLI args (main process only)
+    // Note: --log-level and --log-file are pre-parsed above for early logging
     std::string test_video;
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-            std::cout << "Usage: jellyfin-desktop [options]\n"
-                      << "\nOptions:\n"
-                      << "  -h, --help       Show this help message\n"
-                      << "  --video <file>   Load video file on startup\n";
-            return 0;
-        } else if (strcmp(argv[i], "--video") == 0 && i + 1 < argc) {
-            test_video = argv[++i];
+    if (!is_cef_subprocess) {
+        for (int i = 1; i < argc; i++) {
+            if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+                printf("Usage: jellyfin-desktop [options]\n"
+                       "\nOptions:\n"
+                       "  -h, --help              Show this help message\n"
+                       "  --log-level <level>     Set log level (verbose|debug|info|warn|error)\n"
+                       "  --log-file <path>       Write logs to file (with timestamps)\n"
+                       "  --video <file>          Load video file on startup\n");
+                return 0;
+            } else if (strcmp(argv[i], "--log-level") == 0 && i + 1 < argc) {
+                if (parseLogLevel(argv[++i]) < 0) {
+                    fprintf(stderr, "Invalid log level: %s\n", argv[i]);
+                    return 1;
+                }
+            } else if (strncmp(argv[i], "--log-level=", 12) == 0) {
+                if (parseLogLevel(argv[i] + 12) < 0) {
+                    fprintf(stderr, "Invalid log level: %s\n", argv[i] + 12);
+                    return 1;
+                }
+            } else if (strcmp(argv[i], "--log-file") == 0 && i + 1 < argc) {
+                const char* path = argv[++i];
+                if (!g_log_file) {  // Not already opened by pre-parse
+                    g_log_file = fopen(path, "a");
+                    if (!g_log_file) {
+                        fprintf(stderr, "Failed to open log file: %s\n", path);
+                        return 1;
+                    }
+                }
+            } else if (strncmp(argv[i], "--log-file=", 11) == 0) {
+                const char* path = argv[i] + 11;
+                if (!g_log_file) {
+                    g_log_file = fopen(path, "a");
+                    if (!g_log_file) {
+                        fprintf(stderr, "Failed to open log file: %s\n", path);
+                        return 1;
+                    }
+                }
+            } else if (strcmp(argv[i], "--video") == 0 && i + 1 < argc) {
+                test_video = argv[++i];
+            } else if (strncmp(argv[i], "--video=", 8) == 0) {
+                test_video = argv[i] + 8;
+            } else if (argv[i][0] == '-') {
+                fprintf(stderr, "Unknown option: %s\n", argv[i]);
+                return 1;
+            }
         }
+
+        // Mark so CEF subprocesses skip arg parsing
+#ifdef _WIN32
+        _putenv_s("JELLYFIN_CEF_SUBPROCESS", "1");
+#else
+        setenv("JELLYFIN_CEF_SUBPROCESS", "1", 1);
+#endif
+
+        // Clear args so CEF doesn't see our custom args
+        argc = 1;
+        argv[1] = nullptr;
     }
 
     // CEF initialization
@@ -290,9 +362,9 @@ int main(int argc, char* argv[]) {
 #endif
     CefRefPtr<App> app(new App());
 
-    std::cerr << "Calling CefExecuteProcess..." << std::endl;
+    LOG_DEBUG(LOG_CEF, "Calling CefExecuteProcess...");
     int exit_code = CefExecuteProcess(main_args, app, nullptr);
-    std::cerr << "CefExecuteProcess returned: " << exit_code << std::endl;
+    LOG_DEBUG(LOG_CEF, "CefExecuteProcess returned: %d", exit_code);
     if (exit_code >= 0) {
         return exit_code;
     }
@@ -304,7 +376,7 @@ int main(int argc, char* argv[]) {
 
     // SDL initialization with OpenGL (for main surface CEF overlay)
     if (!SDL_Init(SDL_INIT_VIDEO)) {
-        std::cerr << "SDL_Init failed: " << SDL_GetError() << std::endl;
+        LOG_ERROR(LOG_MAIN, "SDL_Init failed: %s", SDL_GetError());
         return 1;
     }
 
@@ -320,7 +392,7 @@ int main(int argc, char* argv[]) {
     );
 
     if (!window) {
-        std::cerr << "SDL_CreateWindow failed: " << SDL_GetError() << std::endl;
+        LOG_ERROR(LOG_MAIN, "SDL_CreateWindow failed: %s", SDL_GetError());
         SDL_Quit();
         return 1;
     }
@@ -337,23 +409,22 @@ int main(int argc, char* argv[]) {
     MacOSVideoLayer videoLayer;
     if (!videoLayer.init(window, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, 0,
                          nullptr, 0, nullptr)) {
-        std::cerr << "Fatal: macOS video layer init failed" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "Fatal: macOS video layer init failed");
         return 1;
     }
     if (!videoLayer.createSwapchain(width, height)) {
-        std::cerr << "Fatal: macOS video layer swapchain failed" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "Fatal: macOS video layer swapchain failed");
         return 1;
     }
     bool has_subsurface = true;
-    std::cerr << "Using macOS CAMetalLayer for video (HDR: "
-              << (videoLayer.isHdr() ? "yes" : "no") << ")" << std::endl;
+    LOG_INFO(LOG_PLATFORM, "Using macOS CAMetalLayer for video (HDR: %s)", videoLayer.isHdr() ? "yes" : "no");
 
     // Initialize mpv player (using video layer's Vulkan context)
     MpvPlayerVk mpv;
     bool has_video = false;
     double current_playback_rate = 1.0;
     if (!mpv.init(nullptr, &videoLayer)) {
-        std::cerr << "MpvPlayerVk init failed" << std::endl;
+        LOG_ERROR(LOG_MPV, "MpvPlayerVk init failed");
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
@@ -384,13 +455,12 @@ int main(int argc, char* argv[]) {
     float initial_scale = SDL_GetWindowDisplayScale(window);
     int physical_width = static_cast<int>(width * initial_scale);
     int physical_height = static_cast<int>(height * initial_scale);
-    std::cerr << "[macOS HiDPI] scale=" << initial_scale
-              << " logical=" << width << "x" << height
-              << " physical=" << physical_width << "x" << physical_height << std::endl;
+    LOG_INFO(LOG_WINDOW, "macOS HiDPI: scale=%.2f logical=%dx%d physical=%dx%d",
+             initial_scale, width, height, physical_width, physical_height);
 
     MetalCompositor compositor;
     if (!compositor.init(window, physical_width, physical_height)) {
-        std::cerr << "MetalCompositor init failed" << std::endl;
+        LOG_ERROR(LOG_COMPOSITOR, "MetalCompositor init failed");
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
@@ -399,7 +469,7 @@ int main(int argc, char* argv[]) {
     // Second compositor for overlay browser
     MetalCompositor overlay_compositor;
     if (!overlay_compositor.init(window, physical_width, physical_height)) {
-        std::cerr << "Overlay compositor init failed" << std::endl;
+        LOG_ERROR(LOG_OVERLAY, "Overlay compositor init failed");
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
@@ -408,7 +478,7 @@ int main(int argc, char* argv[]) {
     // Windows: Initialize WGL context for OpenGL rendering
     WGLContext wgl;
     if (!wgl.init(window)) {
-        std::cerr << "WGL init failed" << std::endl;
+        LOG_ERROR(LOG_GL, "WGL init failed");
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
@@ -421,12 +491,12 @@ int main(int argc, char* argv[]) {
     double current_playback_rate = 1.0;
     bool has_subsurface = false;  // No separate video layer on Windows OpenGL path
     if (!mpv.init(&wgl)) {
-        std::cerr << "MpvPlayerGL init failed" << std::endl;
+        LOG_ERROR(LOG_MPV, "MpvPlayerGL init failed");
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
     }
-    std::cerr << "Using OpenGL for video rendering (no HDR)" << std::endl;
+    LOG_INFO(LOG_MPV, "Using OpenGL for video rendering (no HDR)");
 
     // Player dispatch helpers (Windows has single OpenGL player)
     auto mpvLoadFile = [&](const std::string& path, double startSec = 0.0) {
@@ -452,7 +522,7 @@ int main(int argc, char* argv[]) {
     // Initialize OpenGL compositor for CEF overlay
     OpenGLCompositor compositor;
     if (!compositor.init(&wgl, width, height)) {
-        std::cerr << "OpenGLCompositor init failed" << std::endl;
+        LOG_ERROR(LOG_COMPOSITOR, "OpenGLCompositor init failed");
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
@@ -461,7 +531,7 @@ int main(int argc, char* argv[]) {
     // Second compositor for overlay browser
     OpenGLCompositor overlay_compositor;
     if (!overlay_compositor.init(&wgl, width, height)) {
-        std::cerr << "Overlay compositor init failed" << std::endl;
+        LOG_ERROR(LOG_OVERLAY, "Overlay compositor init failed");
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
@@ -470,7 +540,7 @@ int main(int argc, char* argv[]) {
     // Linux: Initialize EGL context for OpenGL rendering
     EGLContext_ egl;
     if (!egl.init(window)) {
-        std::cerr << "EGL init failed" << std::endl;
+        LOG_ERROR(LOG_GL, "EGL init failed");
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
@@ -479,8 +549,8 @@ int main(int argc, char* argv[]) {
     // Detect Wayland vs X11 at runtime
     const char* videoDriver = SDL_GetCurrentVideoDriver();
     bool useWayland = videoDriver && strcmp(videoDriver, "wayland") == 0;
-    std::cerr << "SDL video driver: " << (videoDriver ? videoDriver : "null")
-              << " -> using " << (useWayland ? "Wayland" : "X11") << std::endl;
+    LOG_INFO(LOG_MAIN, "SDL video driver: %s -> using %s",
+             videoDriver ? videoDriver : "null", useWayland ? "Wayland" : "X11");
 
     // Video layer (Wayland subsurface only - X11 uses OpenGL composition)
     WaylandSubsurface waylandSubsurface;
@@ -490,22 +560,21 @@ int main(int argc, char* argv[]) {
     if (useWayland) {
         if (!waylandSubsurface.init(window, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, 0,
                                      nullptr, 0, nullptr)) {
-            std::cerr << "Fatal: Wayland subsurface init failed" << std::endl;
+            LOG_ERROR(LOG_PLATFORM, "Fatal: Wayland subsurface init failed");
             return 1;
         }
         if (!waylandSubsurface.createSwapchain(width, height)) {
-            std::cerr << "Fatal: Wayland subsurface swapchain failed" << std::endl;
+            LOG_ERROR(LOG_PLATFORM, "Fatal: Wayland subsurface swapchain failed");
             return 1;
         }
         has_subsurface = true;
         is_hdr = waylandSubsurface.isHdr();
-        std::cerr << "Using Wayland subsurface for video (HDR: "
-                  << (is_hdr ? "yes" : "no") << ")" << std::endl;
+        LOG_INFO(LOG_PLATFORM, "Using Wayland subsurface for video (HDR: %s)", is_hdr ? "yes" : "no");
     } else {
         // X11: No separate video layer - use OpenGL composition like Windows
         has_subsurface = false;
         is_hdr = false;
-        std::cerr << "Using OpenGL composition for video (X11, no HDR)" << std::endl;
+        LOG_INFO(LOG_PLATFORM, "Using OpenGL composition for video (X11, no HDR)");
     }
 
     // Initialize mpv player
@@ -519,14 +588,14 @@ int main(int argc, char* argv[]) {
 
     if (useWayland) {
         if (!mpvVk.init(nullptr, &waylandSubsurface)) {
-            std::cerr << "MpvPlayerVk init failed" << std::endl;
+            LOG_ERROR(LOG_MPV, "MpvPlayerVk init failed");
             SDL_DestroyWindow(window);
             SDL_Quit();
             return 1;
         }
     } else {
         if (!mpvGl.init(&egl)) {
-            std::cerr << "MpvPlayerGL init failed" << std::endl;
+            LOG_ERROR(LOG_MPV, "MpvPlayerGL init failed");
             SDL_DestroyWindow(window);
             SDL_Quit();
             return 1;
@@ -558,13 +627,12 @@ int main(int argc, char* argv[]) {
     float initial_scale = SDL_GetWindowDisplayScale(window);
     int physical_width = static_cast<int>(width * initial_scale);
     int physical_height = static_cast<int>(height * initial_scale);
-    std::cerr << "[HiDPI] initial_scale=" << initial_scale
-              << " logical=" << width << "x" << height
-              << " physical=" << physical_width << "x" << physical_height << std::endl;
+    LOG_INFO(LOG_WINDOW, "HiDPI: initial_scale=%.2f logical=%dx%d physical=%dx%d",
+             initial_scale, width, height, physical_width, physical_height);
 
     OpenGLCompositor compositor;
     if (!compositor.init(&egl, physical_width, physical_height)) {
-        std::cerr << "OpenGLCompositor init failed" << std::endl;
+        LOG_ERROR(LOG_COMPOSITOR, "OpenGLCompositor init failed");
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
@@ -573,7 +641,7 @@ int main(int argc, char* argv[]) {
     // Second compositor for overlay browser
     OpenGLCompositor overlay_compositor;
     if (!overlay_compositor.init(&egl, physical_width, physical_height)) {
-        std::cerr << "Overlay compositor init failed" << std::endl;
+        LOG_ERROR(LOG_OVERLAY, "Overlay compositor init failed");
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
@@ -643,8 +711,11 @@ int main(int argc, char* argv[]) {
         CefString(&settings.cache_path).FromString((cache_path / "cache").string());
     }
 
+    // Capture stderr before CEF starts (routes Chromium logs through SDL)
+    initStderrCapture();
+
     if (!CefInitialize(main_args, settings, app, nullptr)) {
-        std::cerr << "CefInitialize failed" << std::endl;
+        LOG_ERROR(LOG_CEF, "CefInitialize failed");
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
@@ -745,7 +816,7 @@ int main(int argc, char* argv[]) {
     // Context menu overlay
     MenuOverlay menu;
     if (!menu.init()) {
-        std::cerr << "Warning: Failed to init menu overlay (no font found)" << std::endl;
+        LOG_WARN(LOG_MENU, "Failed to init menu overlay (no font found)");
     }
 
     // Cursor state
@@ -761,7 +832,7 @@ int main(int argc, char* argv[]) {
         [&](const void* buffer, int w, int h) {
             static bool first_overlay_paint = true;
             if (first_overlay_paint) {
-                std::cerr << "[CEF Overlay] first paint callback: " << w << "x" << h << std::endl;
+                LOG_DEBUG(LOG_OVERLAY, "first paint callback: %dx%d", w, h);
                 first_overlay_paint = false;
             }
             void* staging = overlay_compositor.getStagingBuffer(w, h);
@@ -771,14 +842,14 @@ int main(int argc, char* argv[]) {
             } else {
                 static bool warned = false;
                 if (!warned) {
-                    std::cerr << "[CEF Overlay] getStagingBuffer returned null for " << w << "x" << h << std::endl;
+                    LOG_WARN(LOG_OVERLAY, "getStagingBuffer returned null for %dx%d", w, h);
                     warned = true;
                 }
             }
         },
         [&](const std::string& url) {
             // loadServer callback - start loading main browser
-            std::cerr << "[Overlay] loadServer callback: " << url << std::endl;
+            LOG_INFO(LOG_OVERLAY, "loadServer callback: %s", url.c_str());
             std::lock_guard<std::mutex> lock(cmd_mutex);
             pending_server_url = url;
         },
@@ -793,7 +864,7 @@ int main(int argc, char* argv[]) {
         [&](const void* buffer, int w, int h) {
             static bool first_paint = true;
             if (first_paint) {
-                std::cerr << "[CEF] first paint callback: " << w << "x" << h << std::endl;
+                LOG_DEBUG(LOG_CEF, "first paint callback: %dx%d", w, h);
                 first_paint = false;
             }
             // Write to back buffer without blocking
@@ -833,8 +904,8 @@ int main(int argc, char* argv[]) {
         },
         [&](bool fullscreen) {
             // Web content requested fullscreen change via JS Fullscreen API
-            std::cerr << "[Fullscreen] CEF requests " << (fullscreen ? "enter" : "exit")
-                      << ", source=" << static_cast<int>(fullscreen_source) << std::endl;
+            LOG_DEBUG(LOG_WINDOW, "Fullscreen: CEF requests %s, source=%d",
+                      fullscreen ? "enter" : "exit", static_cast<int>(fullscreen_source));
             if (fullscreen) {
                 if (fullscreen_source == FullscreenSource::NONE) {
                     fullscreen_source = FullscreenSource::CEF;
@@ -864,7 +935,7 @@ int main(int argc, char* argv[]) {
     const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(display);
     if (mode && mode->refresh_rate > 0) {
         browser_settings.windowless_frame_rate = static_cast<int>(mode->refresh_rate);
-        std::cerr << "CEF frame rate: " << mode->refresh_rate << " Hz" << std::endl;
+        LOG_INFO(LOG_CEF, "CEF frame rate: %.0f Hz", mode->refresh_rate);
     } else {
         browser_settings.windowless_frame_rate = 60;
     }
@@ -886,13 +957,13 @@ int main(int argc, char* argv[]) {
     std::string saved_url = Settings::instance().serverUrl();
     if (saved_url.empty()) {
         // No saved server - create with blank, wait for overlay loadServer IPC
-        std::cerr << "[Main] Waiting for overlay to provide server URL" << std::endl;
+        LOG_INFO(LOG_MAIN, "Waiting for overlay to provide server URL");
         CefBrowserHost::CreateBrowser(window_info, client, "about:blank", browser_settings, nullptr, nullptr);
     } else {
         // Have saved server - start loading immediately, begin overlay fade
         overlay_state = OverlayState::WAITING;
         overlay_fade_start = Clock::now();
-        std::cerr << "[Main] Loading saved server: " << saved_url << std::endl;
+        LOG_INFO(LOG_MAIN, "Loading saved server: %s", saved_url.c_str());
         CefBrowserHost::CreateBrowser(window_info, client, saved_url, browser_settings, nullptr, nullptr);
     }
     // Input routing stack
@@ -934,7 +1005,7 @@ int main(int argc, char* argv[]) {
     auto last_cef_work = Clock::now();
     // Calculate pump interval based on display refresh rate (e.g., 8ms for 120Hz, 16ms for 60Hz)
     int cef_pump_interval_ms = (mode && mode->refresh_rate > 0) ? static_cast<int>(1000.0f / mode->refresh_rate) : 16;
-    std::cerr << "CEF pump interval: " << cef_pump_interval_ms << "ms" << std::endl;
+    LOG_DEBUG(LOG_CEF, "CEF pump interval: %dms", cef_pump_interval_ms);
 #endif
 
     // Set up mpv event callbacks (event-driven like jellyfin-desktop)
@@ -960,7 +1031,7 @@ int main(int argc, char* argv[]) {
         }
     };
     auto finishedCb = [&]() {
-        std::cerr << "[MAIN] Track finished naturally (EOF), emitting finished signal" << std::endl;
+        LOG_INFO(LOG_MAIN, "Track finished naturally (EOF), emitting finished signal");
         has_video = false;
 #if !defined(__APPLE__) && !defined(_WIN32)
         if (has_subsurface) {
@@ -971,7 +1042,7 @@ int main(int argc, char* argv[]) {
         mediaSession.setPlaybackState(PlaybackState::Stopped);
     };
     auto canceledCb = [&]() {
-        std::cerr << "[MAIN] Track canceled (user stop), emitting canceled signal" << std::endl;
+        LOG_DEBUG(LOG_MAIN, "Track canceled (user stop), emitting canceled signal");
         has_video = false;
 #if !defined(__APPLE__) && !defined(_WIN32)
         if (has_subsurface) {
@@ -1010,7 +1081,7 @@ int main(int argc, char* argv[]) {
         mediaSession.setPosition(static_cast<int64_t>(ms * 1000.0));
     };
     auto errorCb = [&](const std::string& error) {
-        std::cerr << "[MAIN] Playback error: " << error << std::endl;
+        LOG_ERROR(LOG_MAIN, "Playback error: %s", error.c_str());
         has_video = false;
 #if !defined(__APPLE__) && !defined(_WIN32)
         if (has_subsurface) {
@@ -1074,7 +1145,7 @@ int main(int argc, char* argv[]) {
 
     // Auto-load test video if provided via --video
     if (!test_video.empty()) {
-        std::cerr << "[TEST] Loading video: " << test_video << std::endl;
+        LOG_INFO(LOG_TEST, "Loading video: %s", test_video.c_str());
         if (mpvLoadFile(test_video)) {
             has_video = true;
 #ifdef __APPLE__
@@ -1090,7 +1161,7 @@ int main(int argc, char* argv[]) {
 #endif
             client->emitPlaying();
         } else {
-            std::cerr << "[TEST] Failed to load: " << test_video << std::endl;
+            LOG_ERROR(LOG_TEST, "Failed to load: %s", test_video.c_str());
         }
     }
 
@@ -1291,14 +1362,14 @@ int main(int argc, char* argv[]) {
 #endif
             } else if (event.type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN) {
                 // WM initiated fullscreen - track source and sync browser state
-                std::cerr << "[Fullscreen] SDL enter, source=" << static_cast<int>(fullscreen_source) << std::endl;
+                LOG_DEBUG(LOG_WINDOW, "Fullscreen: SDL enter, source=%d", static_cast<int>(fullscreen_source));
                 if (fullscreen_source == FullscreenSource::NONE) {
                     fullscreen_source = FullscreenSource::WM;
                 }
                 client->executeJS("document.documentElement.requestFullscreen().catch(()=>{});");
             } else if (event.type == SDL_EVENT_WINDOW_LEAVE_FULLSCREEN) {
                 // WM exited fullscreen - always sync browser, only clear source if WM initiated
-                std::cerr << "[Fullscreen] SDL leave, source=" << static_cast<int>(fullscreen_source) << std::endl;
+                LOG_DEBUG(LOG_WINDOW, "Fullscreen: SDL leave, source=%d", static_cast<int>(fullscreen_source));
                 client->exitFullscreen();
                 if (fullscreen_source == FullscreenSource::WM) {
                     fullscreen_source = FullscreenSource::NONE;
@@ -1351,15 +1422,14 @@ int main(int argc, char* argv[]) {
 #endif
 
                 auto resize_end = std::chrono::steady_clock::now();
-                std::cerr << "[" << _ms() << "ms] resize: total="
-                          << std::chrono::duration_cast<std::chrono::milliseconds>(resize_end-resize_start).count()
-                          << "ms" << std::endl;
+                LOG_DEBUG(LOG_WINDOW, "[%ldms] resize: total=%ldms", _ms(),
+                          std::chrono::duration_cast<std::chrono::milliseconds>(resize_end-resize_start).count());
             } else if (event.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED) {
                 float new_scale = SDL_GetWindowDisplayScale(window);
                 int physical_w = static_cast<int>(current_width * new_scale);
                 int physical_h = static_cast<int>(current_height * new_scale);
-                std::cerr << "[HiDPI] Scale changed to " << new_scale
-                          << ", physical: " << physical_w << "x" << physical_h << std::endl;
+                LOG_INFO(LOG_WINDOW, "HiDPI: Scale changed to %.2f, physical: %dx%d",
+                         new_scale, physical_w, physical_h);
 
                 // Resize compositors to new physical dimensions
                 compositor.resize(physical_w, physical_h);
@@ -1405,11 +1475,11 @@ int main(int argc, char* argv[]) {
             for (const auto& cmd : pending_cmds) {
                 if (cmd.cmd == "load") {
                     double startSec = static_cast<double>(cmd.intArg) / 1000.0;
-                    std::cerr << "[MAIN] playerLoad: " << cmd.url << " start=" << startSec << "s" << std::endl;
+                    LOG_INFO(LOG_MAIN, "playerLoad: %s start=%.1fs", cmd.url.c_str(), startSec);
                     // Parse and set media session metadata
                     if (!cmd.metadata.empty() && cmd.metadata != "{}") {
                         MediaMetadata meta = parseMetadataJson(cmd.metadata);
-                        std::cerr << "[MAIN] metadata: title=" << meta.title << " artist=" << meta.artist << std::endl;
+                        LOG_DEBUG(LOG_MAIN, "metadata: title=%s artist=%s", meta.title.c_str(), meta.artist.c_str());
                         mediaSession.setMetadata(meta);
                         // Apply normalization gain (ReplayGain) if present
                         bool hasGain = false;
@@ -1487,12 +1557,12 @@ int main(int argc, char* argv[]) {
                             double delay = std::stod(cmd.metadata);
                             mpvSetAudioDelay(delay);
                         } catch (...) {
-                            std::cerr << "[MAIN] Invalid audioDelay value: " << cmd.metadata << std::endl;
+                            LOG_WARN(LOG_MAIN, "Invalid audioDelay value: %s", cmd.metadata.c_str());
                         }
                     }
                 } else if (cmd.cmd == "media_metadata") {
                     MediaMetadata meta = parseMetadataJson(cmd.url);
-                    std::cerr << "[MAIN] Media metadata: title=" << meta.title << std::endl;
+                    LOG_DEBUG(LOG_MAIN, "Media metadata: title=%s", meta.title.c_str());
                     mediaSession.setMetadata(meta);
                 } else if (cmd.cmd == "media_position") {
                     int64_t pos_us = static_cast<int64_t>(cmd.intArg) * 1000;
@@ -1506,7 +1576,7 @@ int main(int argc, char* argv[]) {
                         mediaSession.setPlaybackState(PlaybackState::Stopped);
                     }
                 } else if (cmd.cmd == "media_artwork") {
-                    std::cerr << "[MAIN] Media artwork received: " << cmd.url.substr(0, 50) << "..." << std::endl;
+                    LOG_DEBUG(LOG_MAIN, "Media artwork received: %.50s...", cmd.url.c_str());
                     mediaSession.setArtwork(cmd.url);
                 } else if (cmd.cmd == "media_queue") {
                     // Decode flags: bit 0 = canNext, bit 1 = canPrev
@@ -1549,14 +1619,14 @@ int main(int argc, char* argv[]) {
                 // Only process if we're still showing the overlay form
                 // (ignore if already loading/fading from saved server)
                 if (overlay_state == OverlayState::SHOWING) {
-                    std::cerr << "[Main] Loading server from overlay: " << url << std::endl;
+                    LOG_INFO(LOG_MAIN, "Loading server from overlay: %s", url.c_str());
                     Settings::instance().setServerUrl(url);
                     Settings::instance().save();
                     client->loadUrl(url);
                     overlay_state = OverlayState::WAITING;
                     overlay_fade_start = now;
                 } else {
-                    std::cerr << "[Main] Ignoring loadServer (overlay_state != SHOWING)" << std::endl;
+                    LOG_DEBUG(LOG_MAIN, "Ignoring loadServer (overlay_state != SHOWING)");
                 }
             }
         }
@@ -1576,7 +1646,7 @@ int main(int argc, char* argv[]) {
                 window_state.add(active_browser);
                 active_browser->onFocusGained();
                 overlay_fade_start = now;
-                std::cerr << "[Overlay] State: WAITING -> FADING" << std::endl;
+                LOG_DEBUG(LOG_OVERLAY, "State: WAITING -> FADING");
             }
         } else if (overlay_state == OverlayState::FADING) {
             auto elapsed = std::chrono::duration<float>(now - overlay_fade_start).count();
@@ -1586,7 +1656,7 @@ int main(int argc, char* argv[]) {
                 overlay_state = OverlayState::HIDDEN;
                 // Hide overlay view so old content doesn't show through
                 overlay_compositor.setVisible(false);
-                std::cerr << "[Overlay] State: FADING -> HIDDEN" << std::endl;
+                LOG_DEBUG(LOG_OVERLAY, "State: FADING -> HIDDEN");
             } else {
                 overlay_browser_alpha = 1.0f - progress;
             }
@@ -1742,6 +1812,8 @@ int main(int argc, char* argv[]) {
 #endif
 
     CefShutdown();
+    shutdownStderrCapture();
+    shutdownLogging();
     if (current_cursor) {
         SDL_DestroyCursor(current_cursor);
     }

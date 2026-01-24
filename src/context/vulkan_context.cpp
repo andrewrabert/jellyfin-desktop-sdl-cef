@@ -1,7 +1,7 @@
 #include "context/vulkan_context.h"
+#include "logging.h"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
-#include <iostream>
 #include <algorithm>
 
 const char* VulkanContext::device_extensions_[] = {
@@ -61,7 +61,7 @@ bool VulkanContext::createInstance(SDL_Window* window) {
 
     VkResult result = vkCreateInstance(&create_info, nullptr, &instance_);
     if (result != VK_SUCCESS) {
-        std::cerr << "Failed to create Vulkan instance: " << result << std::endl;
+        LOG_ERROR(LOG_MPV, "Failed to create Vulkan instance: %d", result);
         return false;
     }
     return true;
@@ -69,7 +69,7 @@ bool VulkanContext::createInstance(SDL_Window* window) {
 
 bool VulkanContext::createSurface(SDL_Window* window) {
     if (!SDL_Vulkan_CreateSurface(window, instance_, nullptr, &surface_)) {
-        std::cerr << "Failed to create Vulkan surface: " << SDL_GetError() << std::endl;
+        LOG_ERROR(LOG_MPV, "Failed to create Vulkan surface: %s", SDL_GetError());
         return false;
     }
     return true;
@@ -79,7 +79,7 @@ bool VulkanContext::selectPhysicalDevice() {
     uint32_t device_count = 0;
     vkEnumeratePhysicalDevices(instance_, &device_count, nullptr);
     if (device_count == 0) {
-        std::cerr << "No Vulkan devices found" << std::endl;
+        LOG_ERROR(LOG_MPV, "No Vulkan devices found");
         return false;
     }
 
@@ -104,7 +104,7 @@ bool VulkanContext::selectPhysicalDevice() {
 
     VkPhysicalDeviceProperties props;
     vkGetPhysicalDeviceProperties(physical_device_, &props);
-    std::cerr << "Using GPU: " << props.deviceName << std::endl;
+    LOG_INFO(LOG_MPV, "Using GPU: %s", props.deviceName);
 
     return true;
 }
@@ -144,7 +144,7 @@ bool VulkanContext::createDevice() {
 
     VkResult result = vkCreateDevice(physical_device_, &device_info, nullptr, &device_);
     if (result != VK_SUCCESS) {
-        std::cerr << "Failed to create Vulkan device: " << result << std::endl;
+        LOG_ERROR(LOG_MPV, "Failed to create Vulkan device: %d", result);
         return false;
     }
 
@@ -160,34 +160,34 @@ bool VulkanContext::createCommandPool() {
 
     VkResult result = vkCreateCommandPool(device_, &pool_info, nullptr, &command_pool_);
     if (result != VK_SUCCESS) {
-        std::cerr << "Failed to create command pool: " << result << std::endl;
+        LOG_ERROR(LOG_MPV, "Failed to create command pool: %d", result);
         return false;
     }
     return true;
 }
 
 bool VulkanContext::createSwapchain(int width, int height) {
-    std::cerr << "VulkanContext::createSwapchain called" << std::endl;
+    LOG_INFO(LOG_MPV, "VulkanContext::createSwapchain called");
     VkSurfaceCapabilitiesKHR caps;
     VkResult caps_result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device_, surface_, &caps);
     if (caps_result != VK_SUCCESS) {
-        std::cerr << "vkGetPhysicalDeviceSurfaceCapabilitiesKHR failed: " << caps_result << std::endl;
+        LOG_ERROR(LOG_MPV, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR failed: %d", caps_result);
     }
 
     uint32_t format_count = 0;
     VkResult fmt_result = vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device_, surface_, &format_count, nullptr);
-    std::cerr << "Surface format query: result=" << fmt_result << " count=" << format_count << std::endl;
+    LOG_INFO(LOG_MPV, "Surface format query: result=%d count=%u", fmt_result, format_count);
     if (format_count == 0) {
-        std::cerr << "No surface formats available" << std::endl;
+        LOG_ERROR(LOG_MPV, "No surface formats available");
         return false;
     }
     std::vector<VkSurfaceFormatKHR> formats(format_count);
     vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device_, surface_, &format_count, formats.data());
 
     // Debug: print available formats
-    std::cerr << "Available surface formats:" << std::endl;
+    LOG_INFO(LOG_MPV, "Available surface formats:");
     for (const auto& fmt : formats) {
-        std::cerr << "  format=" << fmt.format << " colorSpace=" << fmt.colorSpace << std::endl;
+        LOG_INFO(LOG_MPV, "  format=%d colorSpace=%d", fmt.format, fmt.colorSpace);
     }
 
     // SDR for main window (CEF overlay) - mpv uses separate HDR subsurface
@@ -229,7 +229,7 @@ bool VulkanContext::createSwapchain(int width, int height) {
 
     VkResult result = vkCreateSwapchainKHR(device_, &swapchain_info, nullptr, &swapchain_);
     if (result != VK_SUCCESS) {
-        std::cerr << "Failed to create swapchain: " << result << std::endl;
+        LOG_ERROR(LOG_MPV, "Failed to create swapchain: %d", result);
         return false;
     }
 
@@ -248,8 +248,7 @@ bool VulkanContext::createSwapchain(int width, int height) {
         vkCreateImageView(device_, &view_info, nullptr, &swapchain_views_[i]);
     }
 
-    std::cerr << "Swapchain created: " << swapchain_extent_.width << "x" << swapchain_extent_.height
-              << " (HDR: " << (is_hdr_ ? "yes" : "no") << ")" << std::endl;
+    LOG_INFO(LOG_MPV, "Swapchain created: %ux%u (HDR: %s)", swapchain_extent_.width, swapchain_extent_.height, is_hdr_ ? "yes" : "no");
 
     if (is_hdr_) {
         setHdrMetadata();
@@ -262,7 +261,7 @@ void VulkanContext::setHdrMetadata() {
     auto vkSetHdrMetadataEXT = reinterpret_cast<PFN_vkSetHdrMetadataEXT>(
         vkGetDeviceProcAddr(device_, "vkSetHdrMetadataEXT"));
     if (!vkSetHdrMetadataEXT) {
-        std::cerr << "vkSetHdrMetadataEXT not available" << std::endl;
+        LOG_INFO(LOG_MPV, "vkSetHdrMetadataEXT not available");
         return;
     }
 
@@ -284,7 +283,7 @@ void VulkanContext::setHdrMetadata() {
     hdr_metadata.maxFrameAverageLightLevel = 200.0f;
 
     vkSetHdrMetadataEXT(device_, 1, &swapchain_, &hdr_metadata);
-    std::cerr << "HDR metadata set" << std::endl;
+    LOG_INFO(LOG_MPV, "HDR metadata set");
 }
 
 bool VulkanContext::recreateSwapchain(int width, int height) {

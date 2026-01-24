@@ -1,6 +1,6 @@
 #include "platform/wayland_subsurface.h"
 #include <SDL3/SDL.h>
-#include <iostream>
+#include "logging.h"
 #include <algorithm>
 #include <cstring>
 
@@ -30,7 +30,7 @@ struct ImageDescContext {
 };
 
 static void image_desc_failed(void*, struct wp_image_description_v1*, uint32_t, const char* msg) {
-    std::cerr << "Image description failed: " << msg << std::endl;
+    LOG_ERROR(LOG_PLATFORM, "Image description failed: %s", msg);
 }
 
 static void image_desc_ready(void* data, struct wp_image_description_v1*, uint32_t) {
@@ -72,7 +72,7 @@ void WaylandSubsurface::registryGlobal(void* data, wl_registry* registry,
     } else if (strcmp(interface, wp_color_manager_v1_interface.name) == 0) {
         self->color_manager_ = static_cast<wp_color_manager_v1*>(
             wl_registry_bind(registry, name, &wp_color_manager_v1_interface, std::min(version, 1u)));
-        std::cerr << "Bound wp_color_manager_v1" << std::endl;
+        LOG_INFO(LOG_PLATFORM, "Bound wp_color_manager_v1");
     }
 }
 
@@ -82,7 +82,7 @@ bool WaylandSubsurface::initWayland(SDL_Window* window) {
     // SDL3 property-based Wayland access
     SDL_PropertiesID props = SDL_GetWindowProperties(window);
     if (!props) {
-        std::cerr << "Failed to get window properties" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "Failed to get window properties");
         return false;
     }
 
@@ -92,7 +92,7 @@ bool WaylandSubsurface::initWayland(SDL_Window* window) {
         SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, nullptr));
 
     if (!wl_display_ || !parent_surface) {
-        std::cerr << "Not running on Wayland or failed to get Wayland handles" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "Not running on Wayland or failed to get Wayland handles");
         return false;
     }
 
@@ -103,7 +103,7 @@ bool WaylandSubsurface::initWayland(SDL_Window* window) {
     wl_registry_destroy(registry);
 
     if (!wl_compositor_ || !wl_subcompositor_) {
-        std::cerr << "Missing Wayland globals" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "Missing Wayland globals");
         return false;
     }
 
@@ -113,13 +113,13 @@ bool WaylandSubsurface::initWayland(SDL_Window* window) {
 bool WaylandSubsurface::createSubsurface(wl_surface* parentSurface) {
     mpv_surface_ = wl_compositor_create_surface(wl_compositor_);
     if (!mpv_surface_) {
-        std::cerr << "Failed to create mpv surface" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "Failed to create mpv surface");
         return false;
     }
 
     mpv_subsurface_ = wl_subcompositor_get_subsurface(wl_subcompositor_, mpv_surface_, parentSurface);
     if (!mpv_subsurface_) {
-        std::cerr << "Failed to create subsurface" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "Failed to create subsurface");
         return false;
     }
 
@@ -131,7 +131,7 @@ bool WaylandSubsurface::createSubsurface(wl_surface* parentSurface) {
     wl_surface_commit(mpv_surface_);
     wl_display_roundtrip(wl_display_);
 
-    std::cerr << "Created mpv subsurface below main window" << std::endl;
+    LOG_INFO(LOG_PLATFORM, "Created mpv subsurface below main window");
     return true;
 }
 
@@ -168,7 +168,7 @@ bool WaylandSubsurface::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
     instanceInfo.ppEnabledExtensionNames = instanceExts;
 
     if (vkCreateInstance(&instanceInfo, nullptr, &instance_) != VK_SUCCESS) {
-        std::cerr << "Failed to create Vulkan instance" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "Failed to create Vulkan instance");
         return false;
     }
 
@@ -176,7 +176,7 @@ bool WaylandSubsurface::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
     uint32_t gpuCount = 0;
     vkEnumeratePhysicalDevices(instance_, &gpuCount, nullptr);
     if (gpuCount == 0) {
-        std::cerr << "No Vulkan devices found" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "No Vulkan devices found");
         return false;
     }
     std::vector<VkPhysicalDevice> gpus(gpuCount);
@@ -186,7 +186,7 @@ bool WaylandSubsurface::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
     // Print selected GPU
     VkPhysicalDeviceProperties gpuProps;
     vkGetPhysicalDeviceProperties(physical_device_, &gpuProps);
-    std::cerr << "WaylandSubsurface using GPU: " << gpuProps.deviceName << std::endl;
+    LOG_INFO(LOG_PLATFORM, "WaylandSubsurface using GPU: %s", gpuProps.deviceName);
 
     // Get available extensions
     uint32_t extCount = 0;
@@ -208,7 +208,7 @@ bool WaylandSubsurface::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
 
     for (int i = 0; i < requiredCount; i++) {
         if (!hasExtension(s_requiredDeviceExtensions[i])) {
-            std::cerr << "Missing required extension: " << s_requiredDeviceExtensions[i] << std::endl;
+            LOG_ERROR(LOG_PLATFORM, "Missing required extension: %s", s_requiredDeviceExtensions[i]);
             return false;
         }
         enabledExtensions.push_back(s_requiredDeviceExtensions[i]);
@@ -217,7 +217,7 @@ bool WaylandSubsurface::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
     for (int i = 0; i < optionalCount; i++) {
         if (hasExtension(s_optionalDeviceExtensions[i])) {
             enabledExtensions.push_back(s_optionalDeviceExtensions[i]);
-            std::cerr << "Enabled optional extension: " << s_optionalDeviceExtensions[i] << std::endl;
+            LOG_INFO(LOG_PLATFORM, "Enabled optional extension: %s", s_optionalDeviceExtensions[i]);
         }
     }
 
@@ -266,7 +266,7 @@ bool WaylandSubsurface::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
 
     VkResult deviceResult = vkCreateDevice(physical_device_, &deviceInfo, nullptr, &device_);
     if (deviceResult != VK_SUCCESS) {
-        std::cerr << "Failed to create Vulkan device: VkResult=" << deviceResult << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "Failed to create Vulkan device: VkResult=%d", deviceResult);
         return false;
     }
 
@@ -282,11 +282,11 @@ bool WaylandSubsurface::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
         vkGetInstanceProcAddr(instance_, "vkCreateWaylandSurfaceKHR"));
     if (!vkCreateWaylandSurfaceKHR ||
         vkCreateWaylandSurfaceKHR(instance_, &surfaceInfo, nullptr, &vk_surface_) != VK_SUCCESS) {
-        std::cerr << "Failed to create Vulkan surface" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "Failed to create Vulkan surface");
         return false;
     }
 
-    std::cerr << "Vulkan subsurface initialized (manual instance/device)" << std::endl;
+    LOG_INFO(LOG_PLATFORM, "Vulkan subsurface initialized (manual instance/device)");
     return true;
 }
 
@@ -309,7 +309,7 @@ bool WaylandSubsurface::createSwapchain(int width, int height) {
             swapchain_format_ = fmt.format;
             color_space_ = fmt.colorSpace;
             is_hdr_ = true;
-            std::cerr << "Using PASS_THROUGH with R16G16B16A16_UNORM (format 91)" << std::endl;
+            LOG_INFO(LOG_PLATFORM, "Using PASS_THROUGH with R16G16B16A16_UNORM (format 91)");
             break;
         }
     }
@@ -323,7 +323,7 @@ bool WaylandSubsurface::createSwapchain(int width, int height) {
                     swapchain_format_ = fmt.format;
                     color_space_ = fmt.colorSpace;
                     is_hdr_ = true;
-                    std::cerr << "Using PASS_THROUGH with 10-bit format " << fmt.format << std::endl;
+                    LOG_INFO(LOG_PLATFORM, "Using PASS_THROUGH with 10-bit format %d", fmt.format);
                     break;
                 }
             }
@@ -331,7 +331,7 @@ bool WaylandSubsurface::createSwapchain(int width, int height) {
     }
 
     if (!is_hdr_) {
-        std::cerr << "PASS_THROUGH not available, using SDR" << std::endl;
+        LOG_INFO(LOG_PLATFORM, "PASS_THROUGH not available, using SDR");
     }
 
     // Get surface capabilities
@@ -356,7 +356,7 @@ bool WaylandSubsurface::createSwapchain(int width, int height) {
     swapInfo.clipped = VK_TRUE;
 
     if (vkCreateSwapchainKHR(device_, &swapInfo, nullptr, &swapchain_) != VK_SUCCESS) {
-        std::cerr << "Failed to create swapchain" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "Failed to create swapchain");
         return false;
     }
 
@@ -387,27 +387,25 @@ bool WaylandSubsurface::createSwapchain(int width, int height) {
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     vkCreateFence(device_, &fenceInfo, nullptr, &acquire_fence_);
 
-    std::cerr << "Swapchain: " << width << "x" << height
-              << " format=" << swapchain_format_
-              << " colorSpace=" << color_space_
-              << " HDR=" << (is_hdr_ ? "yes" : "no") << std::endl;
+    LOG_INFO(LOG_PLATFORM, "Swapchain: %dx%d format=%d colorSpace=%d HDR=%s",
+             width, height, swapchain_format_, color_space_, is_hdr_ ? "yes" : "no");
 
     return true;
 }
 
 bool WaylandSubsurface::initColorManagement() {
     if (!color_manager_) {
-        std::cerr << "Color manager not available" << std::endl;
+        LOG_DEBUG(LOG_PLATFORM, "Color manager not available");
         return false;
     }
 
     color_surface_ = wp_color_manager_v1_get_surface(color_manager_, mpv_surface_);
     if (!color_surface_) {
-        std::cerr << "Failed to create color management surface" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "Failed to create color management surface");
         return false;
     }
 
-    std::cerr << "Created color management surface" << std::endl;
+    LOG_INFO(LOG_PLATFORM, "Created color management surface");
     return true;
 }
 
@@ -424,7 +422,7 @@ void WaylandSubsurface::setColorspace() {
     wp_image_description_creator_params_v1* creator =
         wp_color_manager_v1_create_parametric_creator(color_manager_);
     if (!creator) {
-        std::cerr << "Failed to create parametric image description creator" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "Failed to create parametric image description creator");
         return;
     }
 
@@ -441,7 +439,7 @@ void WaylandSubsurface::setColorspace() {
 
     hdr_image_desc_ = wp_image_description_creator_params_v1_create(creator);
     if (!hdr_image_desc_) {
-        std::cerr << "Failed to create HDR image description" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "Failed to create HDR image description");
         return;
     }
 
@@ -450,7 +448,7 @@ void WaylandSubsurface::setColorspace() {
     wl_display_roundtrip(wl_display_);
 
     if (!ctx.ready) {
-        std::cerr << "Image description not ready" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "Image description not ready");
         wp_image_description_v1_destroy(hdr_image_desc_);
         hdr_image_desc_ = nullptr;
         return;
@@ -461,7 +459,7 @@ void WaylandSubsurface::setColorspace() {
         WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
     wl_surface_commit(mpv_surface_);
     wl_display_flush(wl_display_);
-    std::cerr << "Set Wayland surface colorspace to PQ/BT.2020" << std::endl;
+    LOG_INFO(LOG_PLATFORM, "Set Wayland surface colorspace to PQ/BT.2020");
 }
 
 bool WaylandSubsurface::startFrame(VkImage* outImage, VkImageView* outView, VkFormat* outFormat) {

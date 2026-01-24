@@ -2,7 +2,7 @@
 
 #include "platform/x11_video_layer.h"
 #include <SDL3/SDL.h>
-#include <iostream>
+#include "logging.h"
 #include <algorithm>
 #include <cstring>
 
@@ -30,7 +30,7 @@ X11VideoLayer::~X11VideoLayer() {
 bool X11VideoLayer::initX11(SDL_Window* window) {
     SDL_PropertiesID props = SDL_GetWindowProperties(window);
     if (!props) {
-        std::cerr << "[X11VideoLayer] Failed to get window properties" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "[X11VideoLayer] Failed to get window properties");
         return false;
     }
 
@@ -40,7 +40,7 @@ bool X11VideoLayer::initX11(SDL_Window* window) {
         SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0));
 
     if (!display_ || !parent_window_) {
-        std::cerr << "[X11VideoLayer] Not running on X11 or failed to get X11 handles" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "[X11VideoLayer] Not running on X11 or failed to get X11 handles");
         return false;
     }
 
@@ -58,7 +58,7 @@ bool X11VideoLayer::initX11(SDL_Window* window) {
     );
 
     if (!video_window_) {
-        std::cerr << "[X11VideoLayer] Failed to create video child window" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "[X11VideoLayer] Failed to create video child window");
         return false;
     }
 
@@ -67,7 +67,7 @@ bool X11VideoLayer::initX11(SDL_Window* window) {
     XMapWindow(display_, video_window_);
     XFlush(display_);
 
-    std::cerr << "[X11VideoLayer] Created video child window: " << attrs.width << "x" << attrs.height << std::endl;
+    LOG_INFO(LOG_PLATFORM, "[X11VideoLayer] Created video child window: %dx%d", attrs.width, attrs.height);
     return true;
 }
 
@@ -99,7 +99,7 @@ bool X11VideoLayer::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
     instanceInfo.ppEnabledExtensionNames = instanceExts;
 
     if (vkCreateInstance(&instanceInfo, nullptr, &instance_) != VK_SUCCESS) {
-        std::cerr << "[X11VideoLayer] Failed to create Vulkan instance" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "[X11VideoLayer] Failed to create Vulkan instance");
         return false;
     }
 
@@ -107,7 +107,7 @@ bool X11VideoLayer::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
     uint32_t gpuCount = 0;
     vkEnumeratePhysicalDevices(instance_, &gpuCount, nullptr);
     if (gpuCount == 0) {
-        std::cerr << "[X11VideoLayer] No Vulkan devices found" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "[X11VideoLayer] No Vulkan devices found");
         return false;
     }
     std::vector<VkPhysicalDevice> gpus(gpuCount);
@@ -116,7 +116,7 @@ bool X11VideoLayer::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
 
     VkPhysicalDeviceProperties gpuProps;
     vkGetPhysicalDeviceProperties(physical_device_, &gpuProps);
-    std::cerr << "[X11VideoLayer] Using GPU: " << gpuProps.deviceName << std::endl;
+    LOG_INFO(LOG_PLATFORM, "[X11VideoLayer] Using GPU: %s", gpuProps.deviceName);
 
     // Check for required extensions
     uint32_t extCount = 0;
@@ -136,7 +136,7 @@ bool X11VideoLayer::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
 
     for (int i = 0; i < requiredCount; i++) {
         if (!hasExtension(s_requiredDeviceExtensions[i])) {
-            std::cerr << "[X11VideoLayer] Missing required extension: " << s_requiredDeviceExtensions[i] << std::endl;
+            LOG_ERROR(LOG_PLATFORM, "[X11VideoLayer] Missing required extension: %s", s_requiredDeviceExtensions[i]);
             return false;
         }
         enabledExtensions.push_back(s_requiredDeviceExtensions[i]);
@@ -187,7 +187,7 @@ bool X11VideoLayer::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
 
     VkResult deviceResult = vkCreateDevice(physical_device_, &deviceInfo, nullptr, &device_);
     if (deviceResult != VK_SUCCESS) {
-        std::cerr << "[X11VideoLayer] Failed to create Vulkan device: VkResult=" << deviceResult << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "[X11VideoLayer] Failed to create Vulkan device: VkResult=%d", deviceResult);
         return false;
     }
 
@@ -203,11 +203,11 @@ bool X11VideoLayer::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
         vkGetInstanceProcAddr(instance_, "vkCreateXlibSurfaceKHR"));
     if (!vkCreateXlibSurfaceKHR ||
         vkCreateXlibSurfaceKHR(instance_, &surfaceInfo, nullptr, &vk_surface_) != VK_SUCCESS) {
-        std::cerr << "[X11VideoLayer] Failed to create Vulkan X11 surface" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "[X11VideoLayer] Failed to create Vulkan X11 surface");
         return false;
     }
 
-    std::cerr << "[X11VideoLayer] Vulkan context initialized" << std::endl;
+    LOG_INFO(LOG_PLATFORM, "[X11VideoLayer] Vulkan context initialized");
     return true;
 }
 
@@ -328,7 +328,7 @@ bool X11VideoLayer::createSwapchain(int width, int height) {
     swapInfo.clipped = VK_TRUE;
 
     if (vkCreateSwapchainKHR(device_, &swapInfo, nullptr, &swapchain_) != VK_SUCCESS) {
-        std::cerr << "[X11VideoLayer] Failed to create swapchain" << std::endl;
+        LOG_ERROR(LOG_PLATFORM, "[X11VideoLayer] Failed to create swapchain");
         return false;
     }
 
@@ -359,8 +359,7 @@ bool X11VideoLayer::createSwapchain(int width, int height) {
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     vkCreateFence(device_, &fenceInfo, nullptr, &acquire_fence_);
 
-    std::cerr << "[X11VideoLayer] Swapchain created: " << width << "x" << height
-              << " format=" << swapchain_format_ << std::endl;
+    LOG_INFO(LOG_PLATFORM, "[X11VideoLayer] Swapchain created: %dx%d format=%d", width, height, swapchain_format_);
 
     return true;
 }

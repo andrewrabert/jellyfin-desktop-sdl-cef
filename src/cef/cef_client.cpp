@@ -5,7 +5,7 @@
 #include "include/cef_urlrequest.h"
 #include "include/cef_parser.h"
 #include <SDL3/SDL.h>
-#include <iostream>
+#include "logging.h"
 #include <mutex>
 #if !defined(__APPLE__) && !defined(_WIN32)
 #include <unistd.h>  // For dup()
@@ -105,7 +105,7 @@ bool handleSetClipboard(CefRefPtr<CefListValue> args) {
     std::string b64 = args->GetString(1).ToString();
     CefRefPtr<CefBinaryValue> decoded = CefBase64Decode(b64);
     if (!decoded) {
-        std::cerr << "[Clipboard] base64 decode failed" << std::endl;
+        LOG_ERROR(LOG_CEF, "Clipboard base64 decode failed");
         return true;
     }
 
@@ -170,8 +170,8 @@ public:
             }
         }
 
-        std::cerr << "[Connectivity] Request complete: " << (success ? "success" : "failed")
-                  << " url=" << resolved_url << std::endl;
+        LOG_INFO(LOG_CEF, "Connectivity request complete: %s url=%s",
+                 success ? "success" : "failed", resolved_url.c_str());
 
         // Send result back to renderer
         CefRefPtr<CefProcessMessage> msg = CefProcessMessage::Create("serverConnectivityResult");
@@ -217,15 +217,8 @@ bool Client::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
                                const CefString& message,
                                const CefString& source,
                                int line) {
-    std::string levelStr;
-    switch (level) {
-        case LOGSEVERITY_DEBUG: levelStr = "DEBUG"; break;
-        case LOGSEVERITY_INFO: levelStr = "INFO"; break;
-        case LOGSEVERITY_WARNING: levelStr = "WARN"; break;
-        case LOGSEVERITY_ERROR: levelStr = "ERROR"; break;
-        default: levelStr = "LOG"; break;
-    }
-    std::cerr << "[JS:" << levelStr << "] " << message.ToString() << std::endl;
+    (void)browser; (void)level; (void)source; (void)line;
+    LOG_DEBUG(LOG_JS_MAIN, "%s", message.ToString().c_str());
     return false;  // Allow default handling too
 }
 
@@ -240,7 +233,7 @@ bool Client::OnCursorChange(CefRefPtr<CefBrowser> browser,
 }
 
 void Client::OnFullscreenModeChange(CefRefPtr<CefBrowser> browser, bool fullscreen) {
-    std::cerr << "[CEF] OnFullscreenModeChange: " << (fullscreen ? "enter" : "exit") << std::endl;
+    LOG_INFO(LOG_CEF, "OnFullscreenModeChange: %s", fullscreen ? "enter" : "exit");
     if (on_fullscreen_change_) {
         on_fullscreen_change_(fullscreen);
     }
@@ -255,7 +248,7 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
     std::string name = message->GetName().ToString();
     CefRefPtr<CefListValue> args = message->GetArgumentList();
 
-    std::cerr << "[IPC] Received message: " << name << std::endl;
+    LOG_DEBUG(LOG_CEF, "IPC received message: %s", name.c_str());
 
     if (name == "playerLoad") {
         std::string url = args->GetString(0).ToString();
@@ -311,7 +304,7 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
         return true;
     } else if (name == "saveServerUrl") {
         std::string url = args->GetString(0).ToString();
-        std::cerr << "[IPC] Saving server URL: " << url << std::endl;
+        LOG_INFO(LOG_CEF, "IPC saving server URL: %s", url.c_str());
         Settings::instance().setServerUrl(url);
         Settings::instance().saveAsync();
         return true;
@@ -364,8 +357,8 @@ void Client::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
     if (first) {
         int phys_w = 0, phys_h = 0;
         if (physical_size_cb_) physical_size_cb_(phys_w, phys_h);
-        std::cerr << "[CEF] GetViewRect: returning logical " << width_ << "x" << height_
-                  << " (physical=" << phys_w << "x" << phys_h << ")" << std::endl;
+        LOG_INFO(LOG_CEF, "GetViewRect: returning logical %dx%d (physical=%dx%d)",
+                 width_, height_, phys_w, phys_h);
         first = false;
     }
     rect.Set(0, 0, width_, height_);
@@ -407,8 +400,8 @@ void Client::OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
                      int width, int height) {
     static bool first = true;
     if (first) {
-        std::cerr << "[CEF] OnPaint: " << width << "x" << height
-                  << " type=" << (type == PET_VIEW ? "VIEW" : "POPUP") << std::endl;
+        LOG_INFO(LOG_CEF, "OnPaint: %dx%d type=%s", width, height,
+                 type == PET_VIEW ? "VIEW" : "POPUP");
         first = false;
     }
     if (!on_paint_) return;
@@ -470,11 +463,11 @@ void Client::OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
 
 void Client::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
     browser_ = browser;
-    std::cerr << "Browser created" << std::endl;
+    LOG_INFO(LOG_CEF, "Browser created");
 }
 
 void Client::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
-    std::cerr << "Browser closing" << std::endl;
+    LOG_INFO(LOG_CEF, "Browser closing");
     browser_ = nullptr;
     is_closed_ = true;
 }
@@ -497,7 +490,8 @@ void Client::sendMouseMove(int x, int y, int modifiers) {
 
 void Client::sendMouseClick(int x, int y, bool down, int button, int clickCount, int modifiers) {
     if (!browser_) return;
-    std::cerr << "[Mouse] Button " << button << " " << (down ? "DOWN" : "UP") << " at " << x << "," << y << " clicks=" << clickCount << std::endl;
+    LOG_DEBUG(LOG_CEF, "Mouse button %d %s at %d,%d clicks=%d",
+              button, down ? "DOWN" : "UP", x, y, clickCount);
     CefMouseEvent event;
     event.x = x;
     event.y = y;
@@ -697,12 +691,12 @@ bool Client::RunContextMenu(CefRefPtr<CefBrowser> browser,
                             CefRefPtr<CefContextMenuParams> params,
                             CefRefPtr<CefMenuModel> model,
                             CefRefPtr<CefRunContextMenuCallback> callback) {
-    std::cerr << "[ContextMenu] RunContextMenu called, items=" << model->GetCount()
-              << " pos=" << params->GetXCoord() << "," << params->GetYCoord()
-              << " menu_=" << (menu_ ? "yes" : "no") << std::endl;
+    LOG_DEBUG(LOG_CEF, "RunContextMenu called, items=%zu pos=%d,%d menu_=%s",
+              model->GetCount(), params->GetXCoord(), params->GetYCoord(),
+              menu_ ? "yes" : "no");
 
     if (!menu_ || model->GetCount() == 0) {
-        std::cerr << "[ContextMenu] Cancelled (no menu or no items)" << std::endl;
+        LOG_DEBUG(LOG_CEF, "ContextMenu cancelled (no menu or no items)");
         callback->Cancel();
         return true;
     }
@@ -725,7 +719,7 @@ bool Client::RunContextMenu(CefRefPtr<CefBrowser> browser,
         return true;
     }
 
-    std::cerr << "[ContextMenu] Opening menu with " << items.size() << " items" << std::endl;
+    LOG_DEBUG(LOG_CEF, "Opening context menu with %zu items", items.size());
     menu_->open(params->GetXCoord(), params->GetYCoord(), items, callback);
     return true;
 }
@@ -742,15 +736,8 @@ bool OverlayClient::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
                                       const CefString& message,
                                       const CefString& source,
                                       int line) {
-    std::string levelStr;
-    switch (level) {
-        case LOGSEVERITY_DEBUG: levelStr = "DEBUG"; break;
-        case LOGSEVERITY_INFO: levelStr = "INFO"; break;
-        case LOGSEVERITY_WARNING: levelStr = "WARN"; break;
-        case LOGSEVERITY_ERROR: levelStr = "ERROR"; break;
-        default: levelStr = "LOG"; break;
-    }
-    std::cerr << "[Overlay:" << levelStr << "] " << message.ToString() << std::endl;
+    (void)browser; (void)level; (void)source; (void)line;
+    LOG_DEBUG(LOG_JS_OVERLAY, "%s", message.ToString().c_str());
     return false;
 }
 
@@ -761,7 +748,7 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
     std::string name = message->GetName().ToString();
     CefRefPtr<CefListValue> args = message->GetArgumentList();
 
-    std::cerr << "[Overlay IPC] Received: " << name << std::endl;
+    LOG_DEBUG(LOG_CEF, "Overlay IPC received: %s", name.c_str());
 
     if (name == "loadServer" && on_load_server_) {
         std::string url = args->GetString(0).ToString();
@@ -771,7 +758,7 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
 
     if (name == "saveServerUrl") {
         std::string url = args->GetString(0).ToString();
-        std::cerr << "[Overlay IPC] Saving server URL: " << url << std::endl;
+        LOG_INFO(LOG_CEF, "Overlay IPC saving server URL: %s", url.c_str());
         Settings::instance().setServerUrl(url);
         Settings::instance().saveAsync();
         return true;
@@ -779,7 +766,7 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
 
     if (name == "checkServerConnectivity") {
         std::string url = args->GetString(0).ToString();
-        std::cerr << "[Overlay IPC] Checking connectivity: " << url << std::endl;
+        LOG_INFO(LOG_CEF, "Overlay IPC checking connectivity: %s", url.c_str());
 
         // Normalize URL
         if (url.find("://") == std::string::npos) {
@@ -811,7 +798,7 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
         return true;
     }
 
-    std::cerr << "[Overlay IPC] Unhandled: " << name << std::endl;
+    LOG_WARN(LOG_CEF, "Overlay IPC unhandled: %s", name.c_str());
     return false;
 }
 
@@ -821,8 +808,8 @@ void OverlayClient::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
     if (first) {
         int phys_w = 0, phys_h = 0;
         if (physical_size_cb_) physical_size_cb_(phys_w, phys_h);
-        std::cerr << "[Overlay] GetViewRect: returning logical " << width_ << "x" << height_
-                  << " (physical=" << phys_w << "x" << phys_h << ")" << std::endl;
+        LOG_INFO(LOG_CEF, "Overlay GetViewRect: returning logical %dx%d (physical=%dx%d)",
+                 width_, height_, phys_w, phys_h);
         first = false;
     }
     rect.Set(0, 0, width_, height_);
@@ -853,7 +840,7 @@ void OverlayClient::OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type
                              int width, int height) {
     static bool first = true;
     if (first) {
-        std::cerr << "[Overlay] OnPaint: " << width << "x" << height << std::endl;
+        LOG_INFO(LOG_CEF, "Overlay OnPaint: %dx%d", width, height);
         first = false;
     }
     if (on_paint_ && type == PET_VIEW) {
@@ -863,11 +850,11 @@ void OverlayClient::OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type
 
 void OverlayClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
     browser_ = browser;
-    std::cerr << "Overlay browser created" << std::endl;
+    LOG_INFO(LOG_CEF, "Overlay browser created");
 }
 
 void OverlayClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
-    std::cerr << "Overlay browser closing" << std::endl;
+    LOG_INFO(LOG_CEF, "Overlay browser closing");
     browser_ = nullptr;
     is_closed_ = true;
 }

@@ -1,6 +1,6 @@
 #include "cef/resource_handler.h"
-#include <iostream>
 #include <cstring>
+#include "logging.h"
 
 CefRefPtr<CefResourceHandler> EmbeddedSchemeHandlerFactory::Create(
     CefRefPtr<CefBrowser> browser,
@@ -21,7 +21,7 @@ CefRefPtr<CefResourceHandler> EmbeddedSchemeHandlerFactory::Create(
         return new EmbeddedResourceHandler(it->second);
     }
 
-    std::cerr << "[EmbeddedScheme] Not found: " << url << std::endl;
+    LOG_WARN(LOG_RESOURCE, "EmbeddedScheme not found: %s", url.c_str());
     return nullptr;
 }
 

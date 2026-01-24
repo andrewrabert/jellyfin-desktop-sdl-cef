@@ -1,6 +1,6 @@
 #include "compositor/opengl_compositor.h"
-#include <iostream>
 #include <cstring>
+#include "logging.h"
 
 #ifdef __APPLE__
 // macOS gl3.h defines GL_BGRA, not GL_BGRA_EXT
@@ -69,10 +69,7 @@ static void loadWGLExtensions() {
 #endif
 
 static auto _log_start = std::chrono::steady_clock::now();
-#define COMP_LOG(msg) do { \
-    auto _now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - _log_start).count(); \
-    std::cerr << "[" << _now << "ms] [GLCompositor] " << msg << std::endl; std::cerr.flush(); \
-} while(0)
+static long _comp_ms() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - _log_start).count(); }
 
 #ifdef __APPLE__
 // macOS: Desktop OpenGL 3.2 Core with GL_TEXTURE_2D (software path)
@@ -183,7 +180,7 @@ bool OpenGLCompositor::createTexture() {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width_, height_, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     GLenum texErr = glGetError();
     if (texErr != GL_NO_ERROR) {
-        std::cerr << "[GLCompositor] glTexImage2D failed: " << texErr << std::endl;
+        LOG_ERROR(LOG_COMPOSITOR, "glTexImage2D failed: %d", texErr);
         return false;
     }
 #else
@@ -192,7 +189,7 @@ bool OpenGLCompositor::createTexture() {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width_, height_, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     GLenum texErr = glGetError();
     if (texErr != GL_NO_ERROR) {
-        std::cerr << "[GLCompositor] glTexImage2D failed: " << texErr << std::endl;
+        LOG_ERROR(LOG_COMPOSITOR, "glTexImage2D failed: %d", texErr);
         return false;
     }
 #endif
@@ -208,7 +205,7 @@ bool OpenGLCompositor::createTexture() {
 
     GLenum pboErr = glGetError();
     if (pboErr != GL_NO_ERROR) {
-        std::cerr << "[GLCompositor] PBO creation failed: " << pboErr << std::endl;
+        LOG_ERROR(LOG_COMPOSITOR, "PBO creation failed: %d", pboErr);
         return false;
     }
 
@@ -221,7 +218,7 @@ bool OpenGLCompositor::createTexture() {
 
     GLenum err = glGetError();
     if (err != GL_NO_ERROR) {
-        std::cerr << "[GLCompositor] glMapBufferRange failed: " << err << std::endl;
+        LOG_ERROR(LOG_COMPOSITOR, "glMapBufferRange failed: %d", err);
         return false;
     }
 
@@ -239,7 +236,7 @@ bool OpenGLCompositor::createShader() {
     if (!status) {
         char log[512];
         glGetShaderInfoLog(vert, 512, nullptr, log);
-        std::cerr << "[GLCompositor] Vertex shader error: " << log << std::endl;
+        LOG_ERROR(LOG_COMPOSITOR, "Vertex shader error: %s", log);
         glDeleteShader(vert);
         return false;
     }
@@ -253,7 +250,7 @@ bool OpenGLCompositor::createShader() {
     if (!status) {
         char log[512];
         glGetShaderInfoLog(frag, 512, nullptr, log);
-        std::cerr << "[GLCompositor] Fragment shader error: " << log << std::endl;
+        LOG_ERROR(LOG_COMPOSITOR, "Fragment shader error: %s", log);
         glDeleteShader(vert);
         glDeleteShader(frag);
         return false;
@@ -269,7 +266,7 @@ bool OpenGLCompositor::createShader() {
     if (!status) {
         char log[512];
         glGetProgramInfoLog(program_, 512, nullptr, log);
-        std::cerr << "[GLCompositor] Program link error: " << log << std::endl;
+        LOG_ERROR(LOG_COMPOSITOR, "Program link error: %s", log);
         glDeleteShader(vert);
         glDeleteShader(frag);
         glDeleteProgram(program_);
@@ -361,7 +358,7 @@ void OpenGLCompositor::composite(uint32_t width, uint32_t height, float alpha) {
 }
 
 void OpenGLCompositor::resize(uint32_t width, uint32_t height) {
-    COMP_LOG("resize: " << width << "x" << height << " (current: " << width_ << "x" << height_ << ")");
+    LOG_DEBUG(LOG_COMPOSITOR, "[%ldms] resize: %ux%u (current: %ux%u)", _comp_ms(), width, height, width_, height_);
 
     if (width == width_ && height == height_) {
         return;
@@ -376,7 +373,7 @@ void OpenGLCompositor::resize(uint32_t width, uint32_t height) {
     has_content_ = false;
 
     createTexture();
-    COMP_LOG("resize: done");
+    LOG_DEBUG(LOG_COMPOSITOR, "[%ldms] resize: done", _comp_ms());
 }
 
 void OpenGLCompositor::destroyTexture() {

@@ -4,7 +4,7 @@
 #include <fstream>
 #include <algorithm>
 #include <cstring>
-#include <iostream>
+#include "logging.h"
 
 // Font search paths
 static const char* FONT_PATHS[] = {
@@ -51,7 +51,7 @@ bool MenuOverlay::init() {
 
 void MenuOverlay::open(int x, int y, const std::vector<MenuItem>& items,
                        CefRefPtr<CefRunContextMenuCallback> callback) {
-    std::cerr << "[MenuOverlay] open() called at " << x << "," << y << " with " << items.size() << " items" << std::endl;
+    LOG_DEBUG(LOG_MENU, "open() called at %d,%d with %zu items", x, y, items.size());
     items_ = items;
     callback_ = callback;
     // Offset so cursor is inside menu, not at the corner
@@ -62,7 +62,7 @@ void MenuOverlay::open(int x, int y, const std::vector<MenuItem>& items,
     ignore_next_up_ = true;  // Ignore the button-up from the right-click that opened us
     if (on_open_) on_open_();
     render();
-    std::cerr << "[MenuOverlay] rendered, tex=" << tex_width_ << "x" << tex_height_ << " pixels=" << pixels_.size() << std::endl;
+    LOG_DEBUG(LOG_MENU, "rendered, tex=%dx%d pixels=%zu", tex_width_, tex_height_, pixels_.size());
 }
 
 void MenuOverlay::close() {
@@ -102,25 +102,25 @@ bool MenuOverlay::handleMouseMove(int x, int y) {
 }
 
 bool MenuOverlay::handleMouseClick(int x, int y, bool down) {
-    std::cerr << "[MenuOverlay] handleMouseClick " << (down ? "DOWN" : "UP") << " at " << x << "," << y
-              << " is_open=" << is_open_ << " ignore_next_up=" << ignore_next_up_ << std::endl;
+    LOG_DEBUG(LOG_MENU, "handleMouseClick %s at %d,%d is_open=%d ignore_next_up=%d",
+              down ? "DOWN" : "UP", x, y, is_open_, ignore_next_up_);
     if (!is_open_) return false;
     if (down) {
         // Close on click-down outside menu (more responsive)
         int idx = itemAtPoint(x, y);
         if (idx < 0) {
-            std::cerr << "[MenuOverlay] DOWN outside menu, closing" << std::endl;
+            LOG_DEBUG(LOG_MENU, "DOWN outside menu, closing");
             close();
             return false;  // Let event pass through to CEF
         }
     } else {  // On release
         if (ignore_next_up_) {
             ignore_next_up_ = false;
-            std::cerr << "[MenuOverlay] ignoring initial UP" << std::endl;
+            LOG_DEBUG(LOG_MENU, "ignoring initial UP");
             return true;
         }
         int idx = itemAtPoint(x, y);
-        std::cerr << "[MenuOverlay] itemAtPoint=" << idx << std::endl;
+        LOG_DEBUG(LOG_MENU, "itemAtPoint=%d", idx);
         if (idx >= 0) {
             select(idx);
         }

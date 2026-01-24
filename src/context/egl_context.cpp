@@ -1,5 +1,5 @@
 #include "context/egl_context.h"
-#include <iostream>
+#include "logging.h"
 #include <cstring>
 
 #ifdef SDL_PLATFORM_LINUX
@@ -28,27 +28,27 @@ bool EGLContext_::init(SDL_Window* window) {
             SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, nullptr));
 
         if (!wl_display || !wl_surface) {
-            std::cerr << "[EGL] Failed to get Wayland display/surface from SDL" << std::endl;
+            LOG_ERROR(LOG_GL, "[EGL] Failed to get Wayland display/surface from SDL");
             return false;
         }
 
         display_ = eglGetPlatformDisplay(EGL_PLATFORM_WAYLAND_KHR, wl_display, nullptr);
         if (display_ == EGL_NO_DISPLAY) {
-            std::cerr << "[EGL] Failed to get EGL display (Wayland)" << std::endl;
+            LOG_ERROR(LOG_GL, "[EGL] Failed to get EGL display (Wayland)");
             return false;
         }
 
         // Initialize EGL
         EGLint major, minor;
         if (!eglInitialize(display_, &major, &minor)) {
-            std::cerr << "[EGL] Failed to initialize EGL" << std::endl;
+            LOG_ERROR(LOG_GL, "[EGL] Failed to initialize EGL");
             return false;
         }
-        std::cerr << "[EGL] Initialized EGL " << major << "." << minor << " (Wayland)" << std::endl;
+        LOG_INFO(LOG_GL, "[EGL] Initialized EGL %d.%d (Wayland)", major, minor);
 
         // Bind OpenGL ES API
         if (!eglBindAPI(EGL_OPENGL_ES_API)) {
-            std::cerr << "[EGL] Failed to bind OpenGL ES API" << std::endl;
+            LOG_ERROR(LOG_GL, "[EGL] Failed to bind OpenGL ES API");
             return false;
         }
 
@@ -65,7 +65,7 @@ bool EGLContext_::init(SDL_Window* window) {
 
         EGLint num_configs;
         if (!eglChooseConfig(display_, config_attribs, &config_, 1, &num_configs) || num_configs == 0) {
-            std::cerr << "[EGL] Failed to choose config" << std::endl;
+            LOG_ERROR(LOG_GL, "[EGL] Failed to choose config");
             return false;
         }
 
@@ -78,7 +78,7 @@ bool EGLContext_::init(SDL_Window* window) {
 
         context_ = eglCreateContext(display_, config_, EGL_NO_CONTEXT, context_attribs);
         if (context_ == EGL_NO_CONTEXT) {
-            std::cerr << "[EGL] Failed to create context" << std::endl;
+            LOG_ERROR(LOG_GL, "[EGL] Failed to create context");
             return false;
         }
 
@@ -88,13 +88,13 @@ bool EGLContext_::init(SDL_Window* window) {
         // Create wayland-egl window and EGL surface at pixel size
         egl_window_ = wl_egl_window_create(wl_surface, width_, height_);
         if (!egl_window_) {
-            std::cerr << "[EGL] Failed to create wayland-egl window" << std::endl;
+            LOG_ERROR(LOG_GL, "[EGL] Failed to create wayland-egl window");
             return false;
         }
 
         surface_ = eglCreateWindowSurface(display_, config_, (EGLNativeWindowType)egl_window_, nullptr);
         if (surface_ == EGL_NO_SURFACE) {
-            std::cerr << "[EGL] Failed to create window surface" << std::endl;
+            LOG_ERROR(LOG_GL, "[EGL] Failed to create window surface");
             wl_egl_window_destroy(egl_window_);
             egl_window_ = nullptr;
             return false;
@@ -107,7 +107,7 @@ bool EGLContext_::init(SDL_Window* window) {
             SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0));
 
         if (!x11_display || !x11_window) {
-            std::cerr << "[EGL] Failed to get X11 display/window from SDL" << std::endl;
+            LOG_ERROR(LOG_GL, "[EGL] Failed to get X11 display/window from SDL");
             return false;
         }
 
@@ -117,21 +117,21 @@ bool EGLContext_::init(SDL_Window* window) {
             display_ = eglGetDisplay((EGLNativeDisplayType)x11_display);
         }
         if (display_ == EGL_NO_DISPLAY) {
-            std::cerr << "[EGL] Failed to get EGL display (X11)" << std::endl;
+            LOG_ERROR(LOG_GL, "[EGL] Failed to get EGL display (X11)");
             return false;
         }
 
         // Initialize EGL
         EGLint major, minor;
         if (!eglInitialize(display_, &major, &minor)) {
-            std::cerr << "[EGL] Failed to initialize EGL" << std::endl;
+            LOG_ERROR(LOG_GL, "[EGL] Failed to initialize EGL");
             return false;
         }
-        std::cerr << "[EGL] Initialized EGL " << major << "." << minor << " (X11)" << std::endl;
+        LOG_INFO(LOG_GL, "[EGL] Initialized EGL %d.%d (X11)", major, minor);
 
         // Bind OpenGL ES API
         if (!eglBindAPI(EGL_OPENGL_ES_API)) {
-            std::cerr << "[EGL] Failed to bind OpenGL ES API" << std::endl;
+            LOG_ERROR(LOG_GL, "[EGL] Failed to bind OpenGL ES API");
             return false;
         }
 
@@ -148,7 +148,7 @@ bool EGLContext_::init(SDL_Window* window) {
 
         EGLint num_configs;
         if (!eglChooseConfig(display_, config_attribs, &config_, 1, &num_configs) || num_configs == 0) {
-            std::cerr << "[EGL] Failed to choose config" << std::endl;
+            LOG_ERROR(LOG_GL, "[EGL] Failed to choose config");
             return false;
         }
 
@@ -161,7 +161,7 @@ bool EGLContext_::init(SDL_Window* window) {
 
         context_ = eglCreateContext(display_, config_, EGL_NO_CONTEXT, context_attribs);
         if (context_ == EGL_NO_CONTEXT) {
-            std::cerr << "[EGL] Failed to create context" << std::endl;
+            LOG_ERROR(LOG_GL, "[EGL] Failed to create context");
             return false;
         }
 
@@ -171,23 +171,23 @@ bool EGLContext_::init(SDL_Window* window) {
         // Create EGL surface directly from X11 window
         surface_ = eglCreateWindowSurface(display_, config_, (EGLNativeWindowType)x11_window, nullptr);
         if (surface_ == EGL_NO_SURFACE) {
-            std::cerr << "[EGL] Failed to create window surface (X11)" << std::endl;
+            LOG_ERROR(LOG_GL, "[EGL] Failed to create window surface (X11)");
             return false;
         }
     }
 
     // Make context current
     if (!eglMakeCurrent(display_, surface_, surface_, context_)) {
-        std::cerr << "[EGL] Failed to make context current" << std::endl;
+        LOG_ERROR(LOG_GL, "[EGL] Failed to make context current");
         return false;
     }
 
     // Enable vsync
     eglSwapInterval(display_, 1);
 
-    std::cerr << "[EGL] Context created successfully" << std::endl;
-    std::cerr << "[EGL] GL_VERSION: " << glGetString(GL_VERSION) << std::endl;
-    std::cerr << "[EGL] GL_RENDERER: " << glGetString(GL_RENDERER) << std::endl;
+    LOG_INFO(LOG_GL, "[EGL] Context created successfully");
+    LOG_INFO(LOG_GL, "[EGL] GL_VERSION: %s", glGetString(GL_VERSION));
+    LOG_INFO(LOG_GL, "[EGL] GL_RENDERER: %s", glGetString(GL_RENDERER));
 
     return true;
 }
