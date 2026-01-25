@@ -124,6 +124,10 @@ else()
     set(COLOR_MGMT_CLIENT_H "${WAYLAND_GENERATED_DIR}/color-management-v1-client.h")
     set(COLOR_MGMT_CODE_C "${WAYLAND_GENERATED_DIR}/color-management-v1-code.c")
 
+    set(VIEWPORTER_PROTOCOL "${WAYLAND_PROTOCOLS_DIR}/stable/viewporter/viewporter.xml")
+    set(VIEWPORTER_CLIENT_H "${WAYLAND_GENERATED_DIR}/viewporter-client.h")
+    set(VIEWPORTER_CODE_C "${WAYLAND_GENERATED_DIR}/viewporter-code.c")
+
     add_custom_command(
         OUTPUT ${COLOR_MGMT_CLIENT_H}
         COMMAND ${WAYLAND_SCANNER} client-header ${COLOR_MGMT_PROTOCOL} ${COLOR_MGMT_CLIENT_H}
@@ -136,6 +140,18 @@ else()
         DEPENDS ${COLOR_MGMT_PROTOCOL}
         COMMENT "Generating color-management-v1 code"
     )
+    add_custom_command(
+        OUTPUT ${VIEWPORTER_CLIENT_H}
+        COMMAND ${WAYLAND_SCANNER} client-header ${VIEWPORTER_PROTOCOL} ${VIEWPORTER_CLIENT_H}
+        DEPENDS ${VIEWPORTER_PROTOCOL}
+        COMMENT "Generating viewporter client header"
+    )
+    add_custom_command(
+        OUTPUT ${VIEWPORTER_CODE_C}
+        COMMAND ${WAYLAND_SCANNER} private-code ${VIEWPORTER_PROTOCOL} ${VIEWPORTER_CODE_C}
+        DEPENDS ${VIEWPORTER_PROTOCOL}
+        COMMENT "Generating viewporter code"
+    )
 
     set(PLATFORM_SOURCES
         src/context/egl_context.cpp
@@ -146,6 +162,8 @@ else()
         src/player/mpris/media_session_mpris.cpp
         ${COLOR_MGMT_CODE_C}
         ${COLOR_MGMT_CLIENT_H}
+        ${VIEWPORTER_CODE_C}
+        ${VIEWPORTER_CLIENT_H}
     )
     set(PLATFORM_LIBRARIES
         ${WAYLAND_LIBRARIES}

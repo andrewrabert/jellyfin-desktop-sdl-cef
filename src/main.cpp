@@ -405,13 +405,17 @@ int main(int argc, char* argv[]) {
 
 #ifdef __APPLE__
     // macOS: Initialize video layer first (will be at back)
+    // Get physical pixel dimensions for HiDPI support
+    int video_physical_w, video_physical_h;
+    SDL_GetWindowSizeInPixels(window, &video_physical_w, &video_physical_h);
+
     MacOSVideoLayer videoLayer;
     if (!videoLayer.init(window, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, 0,
                          nullptr, 0, nullptr)) {
         LOG_ERROR(LOG_PLATFORM, "Fatal: macOS video layer init failed");
         return 1;
     }
-    if (!videoLayer.createSwapchain(width, height)) {
+    if (!videoLayer.createSwapchain(video_physical_w, video_physical_h)) {
         LOG_ERROR(LOG_PLATFORM, "Fatal: macOS video layer swapchain failed");
         return 1;
     }
@@ -562,10 +566,15 @@ int main(int argc, char* argv[]) {
             LOG_ERROR(LOG_PLATFORM, "Fatal: Wayland subsurface init failed");
             return 1;
         }
-        if (!waylandSubsurface.createSwapchain(width, height)) {
+        // Use physical pixel dimensions for HiDPI support
+        int video_physical_w, video_physical_h;
+        SDL_GetWindowSizeInPixels(window, &video_physical_w, &video_physical_h);
+        if (!waylandSubsurface.createSwapchain(video_physical_w, video_physical_h)) {
             LOG_ERROR(LOG_PLATFORM, "Fatal: Wayland subsurface swapchain failed");
             return 1;
         }
+        // Set viewport destination to logical size (buffer rendered at physical, displayed at logical)
+        waylandSubsurface.setDestinationSize(width, height);
         has_subsurface = true;
         is_hdr = waylandSubsurface.isHdr();
         LOG_INFO(LOG_PLATFORM, "Using Wayland subsurface for video (HDR: %s)", is_hdr ? "yes" : "no");
@@ -1211,9 +1220,12 @@ int main(int argc, char* argv[]) {
             ctx->client->resize(*ctx->current_width, *ctx->current_height);
             ctx->overlay_client->resize(*ctx->current_width, *ctx->current_height);
 
-            // Resize video layer
+            // Resize video layer with physical pixel dimensions
             if (*ctx->has_subsurface) {
-                ctx->videoLayer->resize(*ctx->current_width, *ctx->current_height);
+                float scale = SDL_GetWindowDisplayScale(ctx->window);
+                int physical_w = static_cast<int>(*ctx->current_width * scale);
+                int physical_h = static_cast<int>(*ctx->current_height * scale);
+                ctx->videoLayer->resize(physical_w, physical_h);
             }
         }
 
@@ -1387,7 +1399,7 @@ int main(int argc, char* argv[]) {
                 overlay_client->resize(current_width, current_height);
 
                 if (has_subsurface) {
-                    videoLayer.resize(current_width, current_height);
+                    videoLayer.resize(physical_w, physical_h);
                 }
 #elif defined(_WIN32)
                 // Resize WGL context
@@ -1410,8 +1422,11 @@ int main(int argc, char* argv[]) {
 
                 // Resize video layer (Wayland only - X11 uses OpenGL composition)
                 if (has_subsurface) {
+                    int video_w, video_h;
+                    SDL_GetWindowSizeInPixels(window, &video_w, &video_h);
                     vkDeviceWaitIdle(waylandSubsurface.vkDevice());
-                    waylandSubsurface.recreateSwapchain(current_width, current_height);
+                    waylandSubsurface.recreateSwapchain(video_w, video_h);
+                    waylandSubsurface.setDestinationSize(current_width, current_height);
                 }
                 video_needs_rerender = true;  // Force render even when paused
 #endif

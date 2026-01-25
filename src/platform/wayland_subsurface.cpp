@@ -73,6 +73,10 @@ void WaylandSubsurface::registryGlobal(void* data, wl_registry* registry,
         self->color_manager_ = static_cast<wp_color_manager_v1*>(
             wl_registry_bind(registry, name, &wp_color_manager_v1_interface, std::min(version, 1u)));
         LOG_INFO(LOG_PLATFORM, "Bound wp_color_manager_v1");
+    } else if (strcmp(interface, wp_viewporter_interface.name) == 0) {
+        self->viewporter_ = static_cast<wp_viewporter*>(
+            wl_registry_bind(registry, name, &wp_viewporter_interface, 1));
+        LOG_INFO(LOG_PLATFORM, "Bound wp_viewporter");
     }
 }
 
@@ -127,6 +131,14 @@ bool WaylandSubsurface::createSubsurface(wl_surface* parentSurface) {
     wl_subsurface_set_position(mpv_subsurface_, 0, 0);
     wl_subsurface_place_below(mpv_subsurface_, parentSurface);
     wl_subsurface_set_desync(mpv_subsurface_);
+
+    // Create viewport for HiDPI: render at physical pixels, display at logical size
+    if (viewporter_) {
+        viewport_ = wp_viewporter_get_viewport(viewporter_, mpv_surface_);
+        if (viewport_) {
+            LOG_INFO(LOG_PLATFORM, "Created viewport for HiDPI scaling");
+        }
+    }
 
     wl_surface_commit(mpv_surface_);
     wl_display_roundtrip(wl_display_);
@@ -552,6 +564,14 @@ void WaylandSubsurface::setVisible(bool visible) {
     }
 }
 
+void WaylandSubsurface::setDestinationSize(int width, int height) {
+    if (viewport_ && width > 0 && height > 0) {
+        wp_viewport_set_destination(viewport_, width, height);
+        wl_surface_commit(mpv_surface_);
+        wl_display_flush(wl_display_);
+    }
+}
+
 void WaylandSubsurface::cleanup() {
     destroySwapchain();
 
@@ -579,6 +599,15 @@ void WaylandSubsurface::cleanup() {
     if (color_manager_) {
         wp_color_manager_v1_destroy(color_manager_);
         color_manager_ = nullptr;
+    }
+
+    if (viewport_) {
+        wp_viewport_destroy(viewport_);
+        viewport_ = nullptr;
+    }
+    if (viewporter_) {
+        wp_viewporter_destroy(viewporter_);
+        viewporter_ = nullptr;
     }
 
     if (mpv_subsurface_) {

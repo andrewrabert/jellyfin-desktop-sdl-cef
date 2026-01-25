@@ -4,6 +4,7 @@
 #include <vulkan/vulkan.h>
 #include <wayland-client.h>
 #include "wayland-protocols/color-management-v1-client.h"
+#include "wayland-protocols/viewporter-client.h"
 #include "video_surface.h"
 #include <vector>
 
@@ -49,6 +50,7 @@ public:
     void commit();
     void setColorspace();
     void setVisible(bool visible) override;
+    void setDestinationSize(int width, int height);  // Set logical display size for HiDPI
 
     // Wayland registry callbacks (public for C callback struct)
     static void registryGlobal(void* data, wl_registry* registry,
@@ -67,6 +69,10 @@ private:
     wl_subcompositor* wl_subcompositor_ = nullptr;
     wl_surface* mpv_surface_ = nullptr;
     wl_subsurface* mpv_subsurface_ = nullptr;
+
+    // Viewporter for HiDPI (render at physical, display at logical)
+    wp_viewporter* viewporter_ = nullptr;
+    wp_viewport* viewport_ = nullptr;
 
     // Color management
     wp_color_manager_v1* color_manager_ = nullptr;
