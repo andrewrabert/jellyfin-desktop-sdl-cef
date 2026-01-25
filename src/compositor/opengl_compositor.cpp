@@ -371,7 +371,7 @@ void OpenGLCompositor::queueDmabuf(int fd, uint32_t stride, uint64_t modifier, i
     std::lock_guard<std::mutex> lock(mutex_);
 
     // Close any previously queued fd that wasn't imported
-    if (dmabuf_pending_ && queued_dmabuf_.fd >= 0) {
+    if (dmabuf_pending_.load(std::memory_order_relaxed) && queued_dmabuf_.fd >= 0) {
         close(queued_dmabuf_.fd);
     }
 
@@ -380,7 +380,7 @@ void OpenGLCompositor::queueDmabuf(int fd, uint32_t stride, uint64_t modifier, i
     queued_dmabuf_.modifier = modifier;
     queued_dmabuf_.width = w;
     queued_dmabuf_.height = h;
-    dmabuf_pending_ = true;
+    dmabuf_pending_.store(true, std::memory_order_release);
 #else
     (void)fd; (void)stride; (void)modifier; (void)w; (void)h;
 #endif
@@ -388,6 +388,11 @@ void OpenGLCompositor::queueDmabuf(int fd, uint32_t stride, uint64_t modifier, i
 
 bool OpenGLCompositor::importQueuedDmabuf() {
 #if !defined(__APPLE__) && !defined(_WIN32)
+    // Fast-path: check atomic without lock
+    if (!dmabuf_pending_.load(std::memory_order_acquire)) {
+        return false;
+    }
+
     if (!glEGLImageTargetTexture2DOES || !eglCreateImageKHR || !eglDestroyImageKHR || !ctx_) {
         return false;
     }
@@ -399,15 +404,15 @@ bool OpenGLCompositor::importQueuedDmabuf() {
     int w, h;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!dmabuf_pending_) {
-            return false;
+        if (!dmabuf_pending_.load(std::memory_order_relaxed)) {
+            return false;  // Another thread got it
         }
         fd = queued_dmabuf_.fd;
         stride = queued_dmabuf_.stride;
         modifier = queued_dmabuf_.modifier;
         w = queued_dmabuf_.width;
         h = queued_dmabuf_.height;
-        dmabuf_pending_ = false;
+        dmabuf_pending_.store(false, std::memory_order_relaxed);
         queued_dmabuf_.fd = -1;
     }
 

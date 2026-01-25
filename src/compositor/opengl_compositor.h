@@ -16,6 +16,7 @@ typedef EGLContext_ GLContext;
 
 #include <mutex>
 #include <cstdint>
+#include <atomic>
 
 class OpenGLCompositor {
 public:
@@ -101,6 +102,6 @@ private:
         int height = 0;
     };
     QueuedDmabuf queued_dmabuf_;
-    bool dmabuf_pending_ = false;
+    std::atomic<bool> dmabuf_pending_{false};  // Fast-path check without mutex
 #endif
 };
