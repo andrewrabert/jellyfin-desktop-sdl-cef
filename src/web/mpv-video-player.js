@@ -146,10 +146,17 @@
                 this._core._currentTime = ms;
 
                 const streams = options.mediaSource?.MediaStreams || [];
-                const audioIdx = options.mediaSource.DefaultAudioStreamIndex ?? -1;
+                const defaultAudioIdx = options.mediaSource.DefaultAudioStreamIndex ?? -1;
                 const defaultSubIdx = options.mediaSource.DefaultSubtitleStreamIndex ?? -1;
 
-                // Convert subtitle index to relative (audio conversion not yet implemented)
+                // Convert audio index from Jellyfin global stream index to mpv 1-based audio track index
+                let audioParam = -1;
+                if (defaultAudioIdx >= 0) {
+                    const relIdx = getRelativeIndexByType(streams, defaultAudioIdx, 'Audio');
+                    audioParam = relIdx != null ? relIdx : -1;
+                }
+
+                // Convert subtitle index to relative
                 let subParam = -1;
                 if (defaultSubIdx >= 0) {
                     const subStream = getStreamByIndex(streams, defaultSubIdx);
@@ -164,7 +171,7 @@
                 window.api.player.load(val,
                     { startMilliseconds: ms, autoplay: true },
                     { type: 'video', metadata: options.item },
-                    audioIdx,
+                    audioParam,
                     subParam,
                     resolve);
             });
@@ -198,7 +205,13 @@
         getSubtitleOffset() { return 0; }
 
         setAudioStreamIndex(index) {
-            window.api.player.setAudioStream(index);
+            if (index == null || index < 0) {
+                window.api.player.setAudioStream(-1);
+                return;
+            }
+            const streams = this._currentPlayOptions?.mediaSource?.MediaStreams || [];
+            const relIdx = getRelativeIndexByType(streams, index, 'Audio');
+            window.api.player.setAudioStream(relIdx != null ? relIdx : -1);
         }
 
         onEndedInternal() {
