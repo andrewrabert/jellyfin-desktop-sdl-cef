@@ -1025,6 +1025,7 @@ int main(int argc, char* argv[]) {
     bool focus_set = false;
     int current_width = width;
     int current_height = height;
+    float current_scale = SDL_GetWindowDisplayScale(window);
     bool video_ready = false;  // Latches true once first frame renders
 #ifdef __APPLE__
     bool window_activated = false;  // Activate window on first expose event
@@ -1435,20 +1436,36 @@ int main(int argc, char* argv[]) {
                 LOG_DEBUG(LOG_WINDOW, "[%ldms] resize: total=%ldms", _ms(),
                           std::chrono::duration_cast<std::chrono::milliseconds>(resize_end-resize_start).count());
             } else if (event.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED) {
+                float new_scale = SDL_GetWindowDisplayScale(window);
+
+                // Resize window to maintain same physical size
+                int new_logical_w = static_cast<int>(current_width * current_scale / new_scale);
+                int new_logical_h = static_cast<int>(current_height * current_scale / new_scale);
+                LOG_INFO(LOG_WINDOW, "Display scale changed: %.2f -> %.2f, resizing %dx%d -> %dx%d",
+                         current_scale, new_scale, current_width, current_height, new_logical_w, new_logical_h);
+                SDL_SetWindowSize(window, new_logical_w, new_logical_h);
+
+                // Update tracked state
+                current_width = new_logical_w;
+                current_height = new_logical_h;
+                current_scale = new_scale;
+
+                // Get actual physical dimensions after resize
                 int physical_w, physical_h;
                 SDL_GetWindowSizeInPixels(window, &physical_w, &physical_h);
-                LOG_INFO(LOG_WINDOW, "HiDPI: Scale changed, physical: %dx%d", physical_w, physical_h);
 
                 // Resize compositors to new physical dimensions
                 compositor.resize(physical_w, physical_h);
                 overlay_compositor.resize(physical_w, physical_h);
 
-                // Notify CEF of the scale change
+                // Update CEF clients with new logical size and notify of scale change
+                client->resize(new_logical_w, new_logical_h);
+                overlay_client->resize(new_logical_w, new_logical_h);
                 if (client->browser()) {
-                    client->browser()->GetHost()->WasResized();
+                    client->browser()->GetHost()->NotifyScreenInfoChanged();
                 }
                 if (overlay_client->browser()) {
-                    overlay_client->browser()->GetHost()->WasResized();
+                    overlay_client->browser()->GetHost()->NotifyScreenInfoChanged();
                 }
             }
             have_event = SDL_PollEvent(&event);

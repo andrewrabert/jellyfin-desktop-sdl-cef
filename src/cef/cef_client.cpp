@@ -369,17 +369,11 @@ bool Client::GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo& screen_
         physical_size_cb_(physical_w, physical_h);
     }
     float scale = (physical_w > 0 && width_ > 0) ? static_cast<float>(physical_w) / width_ : 1.0f;
-    static bool first = true;
-    if (first) {
-        LOG_INFO(LOG_CEF, "GetScreenInfo: logical=%dx%d physical=%dx%d scale=%.2f",
-                 width_, height_, physical_w, physical_h, scale);
-        first = false;
-    }
     screen_info.device_scale_factor = scale;
     screen_info.depth = 32;
     screen_info.depth_per_component = 8;
     screen_info.is_monochrome = false;
-    screen_info.rect = CefRect(0, 0, physical_w, physical_h);
+    screen_info.rect = CefRect(0, 0, width_, height_);  // logical coordinates
     screen_info.available_rect = screen_info.rect;
     return true;
 }
@@ -854,17 +848,11 @@ bool OverlayClient::GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo& 
         physical_size_cb_(physical_w, physical_h);
     }
     float scale = (physical_w > 0 && width_ > 0) ? static_cast<float>(physical_w) / width_ : 1.0f;
-    static bool first = true;
-    if (first) {
-        LOG_INFO(LOG_CEF, "Overlay GetScreenInfo: logical=%dx%d physical=%dx%d scale=%.2f",
-                 width_, height_, physical_w, physical_h, scale);
-        first = false;
-    }
     screen_info.device_scale_factor = scale;
     screen_info.depth = 32;
     screen_info.depth_per_component = 8;
     screen_info.is_monochrome = false;
-    screen_info.rect = CefRect(0, 0, physical_w, physical_h);
+    screen_info.rect = CefRect(0, 0, width_, height_);  // logical coordinates
     screen_info.available_rect = screen_info.rect;
     return true;
 }
