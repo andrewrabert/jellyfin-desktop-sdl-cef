@@ -906,6 +906,12 @@ int main(int argc, char* argv[]) {
 #else
         nullptr
 #endif
+#ifdef __APPLE__
+        // IOSurface callback for macOS accelerated paint - queue for import on main thread
+        , [&](void* surface, int format, int w, int h) {
+            overlay_compositor.queueIOSurface(surface, format, w, h);
+        }
+#endif
     ));
 
     // Track who initiated fullscreen (only changes from NONE, returns to NONE on exit)
@@ -979,12 +985,18 @@ int main(int argc, char* argv[]) {
             }
         },
         getPhysicalSize
+#ifdef __APPLE__
+        // IOSurface callback for macOS accelerated paint - queue for import on main thread
+        , [&](void* surface, int format, int w, int h) {
+            compositor.queueIOSurface(surface, format, w, h);
+        }
+#endif
     ));
 
     CefWindowInfo window_info;
     window_info.SetAsWindowless(0);
 #ifdef __APPLE__
-    window_info.shared_texture_enabled = false;  // macOS: use OnPaint (IOSurface not implemented)
+    window_info.shared_texture_enabled = true;  // macOS: use IOSurface zero-copy
 #elif defined(_WIN32)
     window_info.shared_texture_enabled = true;
 #else
@@ -1010,7 +1022,7 @@ int main(int argc, char* argv[]) {
     CefWindowInfo overlay_window_info;
     overlay_window_info.SetAsWindowless(0);
 #ifdef __APPLE__
-    overlay_window_info.shared_texture_enabled = false;  // macOS: use OnPaint
+    overlay_window_info.shared_texture_enabled = true;  // macOS: use IOSurface zero-copy
 #elif defined(_WIN32)
     overlay_window_info.shared_texture_enabled = true;
 #else
@@ -1785,6 +1797,7 @@ int main(int argc, char* argv[]) {
         }
 
         flushPaintBuffer();
+        compositor.importQueuedIOSurface();
 
         // Composite main browser (Metal handles its own presentation)
         // Always call composite() - it handles "no content yet" internally and uploads staging data
@@ -1795,6 +1808,7 @@ int main(int argc, char* argv[]) {
         // Composite overlay browser (with fade alpha)
         if (overlay_state != OverlayState::HIDDEN && overlay_browser_alpha > 0.01f) {
             flushOverlayPaintBuffer();
+            overlay_compositor.importQueuedIOSurface();
             if (overlay_compositor.hasValidOverlay() || overlay_compositor.hasPendingContent()) {
                 overlay_compositor.composite(current_width, current_height, overlay_browser_alpha);
             }

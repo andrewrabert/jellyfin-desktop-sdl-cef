@@ -4,7 +4,9 @@
 #import <Cocoa/Cocoa.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
+#import <IOSurface/IOSurface.h>
 #include <cstring>
+#include "logging.h"
 
 // Helper macros for void* casts
 #define DEVICE ((__bridge id<MTLDevice>)device_)
@@ -198,6 +200,16 @@ bool MetalCompositor::createTexture(uint32_t width, uint32_t height) {
 }
 
 void MetalCompositor::cleanup() {
+    // Release any pending queued IOSurface
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (queued_iosurface_.surface) {
+            CFRelease((IOSurfaceRef)queued_iosurface_.surface);
+            queued_iosurface_.surface = nullptr;
+        }
+        iosurface_pending_.store(false, std::memory_order_relaxed);
+    }
+
     if (metal_view_) {
         [metal_view_ removeFromSuperview];
         metal_view_ = nil;
@@ -253,6 +265,123 @@ void MetalCompositor::updateOverlayPartial(const void* data, int src_width, int 
         memcpy(staging_buffer_, data, src_width * src_height * 4);
         staging_dirty_ = true;
     }
+}
+
+void MetalCompositor::queueIOSurface(void* ioSurface, int format, int width, int height) {
+    if (!ioSurface || width <= 0 || height <= 0) {
+        return;
+    }
+
+    static bool first = true;
+    if (first) {
+        LOG_INFO(LOG_COMPOSITOR, "MetalCompositor: first IOSurface queued %dx%d format=%d", width, height, format);
+        first = false;
+    }
+
+    IOSurfaceRef surface = (IOSurfaceRef)ioSurface;
+
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    // Release any previously queued surface that wasn't imported
+    if (iosurface_pending_.load(std::memory_order_relaxed) && queued_iosurface_.surface) {
+        CFRelease((IOSurfaceRef)queued_iosurface_.surface);
+    }
+
+    // Retain the surface - CEF may release it after callback returns
+    CFRetain(surface);
+
+    queued_iosurface_.surface = surface;
+    queued_iosurface_.format = format;
+    queued_iosurface_.width = width;
+    queued_iosurface_.height = height;
+    iosurface_pending_.store(true, std::memory_order_release);
+}
+
+bool MetalCompositor::importQueuedIOSurface() {
+    // Fast-path: check atomic without lock
+    if (!iosurface_pending_.load(std::memory_order_acquire)) {
+        return false;
+    }
+
+    // Get queued IOSurface under lock
+    IOSurfaceRef surface;
+    int format, w, h;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!iosurface_pending_.load(std::memory_order_relaxed)) {
+            return false;  // Another thread got it
+        }
+        surface = (IOSurfaceRef)queued_iosurface_.surface;
+        format = queued_iosurface_.format;
+        w = queued_iosurface_.width;
+        h = queued_iosurface_.height;
+        iosurface_pending_.store(false, std::memory_order_relaxed);
+        queued_iosurface_.surface = nullptr;
+    }
+
+    if (!surface) {
+        return false;
+    }
+
+    // Check if this is the same surface as before - skip texture recreation
+    IOSurfaceID surfaceID = IOSurfaceGetID(surface);
+    if (surfaceID == cached_surface_id_ && texture_) {
+        // Same surface, just mark as having content
+        CFRelease(surface);
+        has_content_ = true;
+        return true;
+    }
+
+    // Update layer drawable size if dimensions changed
+    if (w != (int)width_ || h != (int)height_) {
+        width_ = w;
+        height_ = h;
+        if (metal_layer_) {
+            metal_layer_.drawableSize = CGSizeMake(w, h);
+        }
+    }
+
+    // Release old texture
+    if (texture_) {
+        CFBridgingRelease(texture_);
+        texture_ = nullptr;
+    }
+
+    // Create texture descriptor matching IOSurface properties
+    MTLTextureDescriptor* desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                    width:w
+                                                                                   height:h
+                                                                                mipmapped:NO];
+    desc.usage = MTLTextureUsageShaderRead;
+    desc.storageMode = MTLStorageModeShared;  // IOSurface is shared memory
+
+    // Create texture directly from IOSurface - zero-copy!
+    id<MTLTexture> texture = [DEVICE newTextureWithDescriptor:desc iosurface:surface plane:0];
+
+    // Done with the retained surface
+    CFRelease(surface);
+
+    if (!texture) {
+        LOG_ERROR(LOG_COMPOSITOR, "MetalCompositor: failed to create texture from IOSurface");
+        return false;
+    }
+
+    texture_ = (void*)CFBridgingRetain(texture);
+    cached_surface_id_ = surfaceID;
+    has_content_ = true;
+    staging_dirty_ = false;  // No staging buffer upload needed
+
+    static bool first_import = true;
+    if (first_import) {
+        LOG_INFO(LOG_COMPOSITOR, "MetalCompositor: first IOSurface imported %dx%d", w, h);
+        first_import = false;
+    }
+
+    return true;
+}
+
+bool MetalCompositor::hasPendingContent() const {
+    return staging_dirty_ || iosurface_pending_.load(std::memory_order_acquire);
 }
 
 void* MetalCompositor::getStagingBuffer(int width, int height) {

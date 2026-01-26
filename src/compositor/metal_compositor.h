@@ -4,6 +4,7 @@
 #include <SDL3/SDL.h>
 #include <cstdint>
 #include <mutex>
+#include <atomic>
 
 // Forward declarations for ObjC types
 #ifdef __OBJC__
@@ -27,6 +28,12 @@ public:
     // Update overlay with arbitrary size (recreates texture if needed)
     void updateOverlayPartial(const void* data, int src_width, int src_height);
 
+    // Queue IOSurface for import on main thread (called from CEF thread)
+    void queueIOSurface(void* ioSurface, int format, int width, int height);
+
+    // Import queued IOSurface (called from main thread)
+    bool importQueuedIOSurface();
+
     // Get staging buffer for direct copy
     void* getStagingBuffer(int width, int height);
     void markStagingDirty();
@@ -41,7 +48,7 @@ public:
     void setVisible(bool visible);
 
     bool hasValidOverlay() const { return has_content_; }
-    bool hasPendingContent() const { return staging_dirty_; }
+    bool hasPendingContent() const;
 
     uint32_t width() const { return width_; }
     uint32_t height() const { return height_; }
@@ -72,6 +79,17 @@ private:
     size_t staging_size_ = 0;
     bool staging_dirty_ = false;
     bool has_content_ = false;
+
+    // IOSurface queue for zero-copy rendering
+    struct QueuedIOSurface {
+        void* surface = nullptr;  // IOSurfaceRef (retained)
+        int format = 0;
+        int width = 0;
+        int height = 0;
+    };
+    QueuedIOSurface queued_iosurface_;
+    std::atomic<bool> iosurface_pending_{false};
+    uint32_t cached_surface_id_ = 0;  // To avoid recreating texture for same surface
 };
 
 #endif // __APPLE__

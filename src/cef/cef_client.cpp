@@ -205,10 +205,17 @@ private:
 Client::Client(int width, int height, PaintCallback on_paint, PlayerMessageCallback on_player_msg,
                AcceleratedPaintCallback on_accel_paint, MenuOverlay* menu,
                CursorChangeCallback on_cursor_change, FullscreenChangeCallback on_fullscreen_change,
-               PhysicalSizeCallback physical_size_cb)
+               PhysicalSizeCallback physical_size_cb
+#ifdef __APPLE__
+               , IOSurfacePaintCallback on_iosurface_paint
+#endif
+               )
     : width_(width), height_(height), on_paint_(std::move(on_paint)),
       on_player_msg_(std::move(on_player_msg)),
       on_accel_paint_(std::move(on_accel_paint)),
+#ifdef __APPLE__
+      on_iosurface_paint_(std::move(on_iosurface_paint)),
+#endif
       menu_(menu), on_cursor_change_(std::move(on_cursor_change)),
       on_fullscreen_change_(std::move(on_fullscreen_change)),
       physical_size_cb_(std::move(physical_size_cb)) {}
@@ -458,7 +465,23 @@ void Client::OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
 void Client::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
                                  const RectList& dirtyRects,
                                  const CefAcceleratedPaintInfo& info) {
-#if !defined(__APPLE__) && !defined(_WIN32)
+#ifdef __APPLE__
+    static bool first = true;
+    if (first) {
+        LOG_INFO(LOG_CEF, "OnAcceleratedPaint: iosurface=%p format=%d size=%dx%d",
+                 info.shared_texture_io_surface, info.format,
+                 info.extra.coded_size.width, info.extra.coded_size.height);
+        first = false;
+    }
+
+    if (on_iosurface_paint_ && type == PET_VIEW && info.shared_texture_io_surface) {
+        int w = info.extra.coded_size.width;
+        int h = info.extra.coded_size.height;
+        if (w > 0 && h > 0) {
+            on_iosurface_paint_(info.shared_texture_io_surface, info.format, w, h);
+        }
+    }
+#elif !defined(_WIN32)
     static bool first = true;
     if (first) {
         LOG_INFO(LOG_CEF, "OnAcceleratedPaint: planes=%d modifier=0x%lx format=%d",
@@ -759,11 +782,19 @@ bool Client::RunContextMenu(CefRefPtr<CefBrowser> browser,
 
 // OverlayClient implementation
 OverlayClient::OverlayClient(int width, int height, PaintCallback on_paint, LoadServerCallback on_load_server,
-                             PhysicalSizeCallback physical_size_cb, AcceleratedPaintCallback on_accel_paint)
+                             PhysicalSizeCallback physical_size_cb, AcceleratedPaintCallback on_accel_paint
+#ifdef __APPLE__
+                             , IOSurfacePaintCallback on_iosurface_paint
+#endif
+                             )
     : width_(width), height_(height), on_paint_(std::move(on_paint)),
       on_load_server_(std::move(on_load_server)),
       physical_size_cb_(std::move(physical_size_cb)),
-      on_accel_paint_(std::move(on_accel_paint)) {}
+      on_accel_paint_(std::move(on_accel_paint))
+#ifdef __APPLE__
+      , on_iosurface_paint_(std::move(on_iosurface_paint))
+#endif
+      {}
 
 bool OverlayClient::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
                                       cef_log_severity_t level,
@@ -878,7 +909,23 @@ void OverlayClient::OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type
 void OverlayClient::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
                                         const RectList& dirtyRects,
                                         const CefAcceleratedPaintInfo& info) {
-#if !defined(__APPLE__) && !defined(_WIN32)
+#ifdef __APPLE__
+    static bool first = true;
+    if (first) {
+        LOG_INFO(LOG_CEF, "Overlay OnAcceleratedPaint: iosurface=%p format=%d size=%dx%d",
+                 info.shared_texture_io_surface, info.format,
+                 info.extra.coded_size.width, info.extra.coded_size.height);
+        first = false;
+    }
+
+    if (on_iosurface_paint_ && type == PET_VIEW && info.shared_texture_io_surface) {
+        int w = info.extra.coded_size.width;
+        int h = info.extra.coded_size.height;
+        if (w > 0 && h > 0) {
+            on_iosurface_paint_(info.shared_texture_io_surface, info.format, w, h);
+        }
+    }
+#elif !defined(_WIN32)
     static bool first = true;
     if (first) {
         LOG_INFO(LOG_CEF, "Overlay OnAcceleratedPaint: planes=%d modifier=0x%lx format=%d",

@@ -50,6 +50,12 @@ using PhysicalSizeCallback = std::function<void(int& width, int& height)>;
 using AcceleratedPaintCallback = std::function<void(int fd, uint32_t stride, uint64_t modifier,
                                                      int width, int height)>;
 
+#ifdef __APPLE__
+// IOSurface paint callback (macOS accelerated paint)
+// surface: IOSurfaceRef, format: pixel format enum
+using IOSurfacePaintCallback = std::function<void(void* surface, int format, int width, int height)>;
+#endif
+
 class Client : public CefClient, public CefRenderHandler, public CefLifeSpanHandler, public CefDisplayHandler, public CefLoadHandler, public CefContextMenuHandler, public InputReceiver {
 public:
     using PaintCallback = std::function<void(const void* buffer, int width, int height)>;
@@ -58,7 +64,11 @@ public:
            AcceleratedPaintCallback on_accel_paint = nullptr, MenuOverlay* menu = nullptr,
            CursorChangeCallback on_cursor_change = nullptr,
            FullscreenChangeCallback on_fullscreen_change = nullptr,
-           PhysicalSizeCallback physical_size_cb = nullptr);
+           PhysicalSizeCallback physical_size_cb = nullptr
+#ifdef __APPLE__
+           , IOSurfacePaintCallback on_iosurface_paint = nullptr
+#endif
+           );
 
     // CefClient
     CefRefPtr<CefRenderHandler> GetRenderHandler() override { return this; }
@@ -157,6 +167,9 @@ private:
     PaintCallback on_paint_;
     PlayerMessageCallback on_player_msg_;
     AcceleratedPaintCallback on_accel_paint_;
+#ifdef __APPLE__
+    IOSurfacePaintCallback on_iosurface_paint_;
+#endif
     MenuOverlay* menu_ = nullptr;
     CursorChangeCallback on_cursor_change_;
     FullscreenChangeCallback on_fullscreen_change_;
@@ -183,7 +196,11 @@ public:
 
     OverlayClient(int width, int height, PaintCallback on_paint, LoadServerCallback on_load_server,
                   PhysicalSizeCallback physical_size_cb = nullptr,
-                  AcceleratedPaintCallback on_accel_paint = nullptr);
+                  AcceleratedPaintCallback on_accel_paint = nullptr
+#ifdef __APPLE__
+                  , IOSurfacePaintCallback on_iosurface_paint = nullptr
+#endif
+                  );
 
     CefRefPtr<CefRenderHandler> GetRenderHandler() override { return this; }
     CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
@@ -240,6 +257,9 @@ private:
     LoadServerCallback on_load_server_;
     PhysicalSizeCallback physical_size_cb_;
     AcceleratedPaintCallback on_accel_paint_;
+#ifdef __APPLE__
+    IOSurfacePaintCallback on_iosurface_paint_;
+#endif
     float scale_override_ = 0.0f;
     std::atomic<bool> is_closed_ = false;
     CefRefPtr<CefBrowser> browser_;
