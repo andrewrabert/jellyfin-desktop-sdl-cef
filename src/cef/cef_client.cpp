@@ -660,6 +660,13 @@ void Client::resize(int width, int height) {
     height_ = height;
     if (browser_) {
         browser_->GetHost()->WasResized();
+        browser_->GetHost()->Invalidate(PET_VIEW);
+    }
+}
+
+void Client::forceRepaint() {
+    if (browser_) {
+        browser_->GetHost()->Invalidate(PET_VIEW);
     }
 }
 
@@ -913,6 +920,7 @@ void OverlayClient::resize(int width, int height) {
     height_ = height;
     if (browser_) {
         browser_->GetHost()->WasResized();
+        browser_->GetHost()->Invalidate(PET_VIEW);
     }
 }
 

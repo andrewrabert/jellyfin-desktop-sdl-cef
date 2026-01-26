@@ -17,6 +17,7 @@ typedef EGLContext_ GLContext;
 #include <mutex>
 #include <cstdint>
 #include <atomic>
+#include <vector>
 
 class OpenGLCompositor {
 public:
@@ -31,8 +32,15 @@ public:
 
     // Get direct pointer to staging buffer for zero-copy writes
     void* getStagingBuffer(int width, int height);
-    void markStagingDirty() { staging_pending_ = true; }
+    void markStagingDirty() { staging_pending_ = true; has_content_ = true; }
     bool hasPendingContent() const { return staging_pending_; }
+
+    // Update with partial/mismatched size data (copies overlapping region)
+    void updateOverlayPartial(const void* data, int src_width, int src_height);
+
+    // Get current compositor dimensions
+    uint32_t width() const { return width_; }
+    uint32_t height() const { return height_; }
 
     // Flush pending overlay data to GPU
     bool flushOverlay();
@@ -53,7 +61,7 @@ public:
     void setVisible(bool visible) { (void)visible; }
 
     // Check if we have valid content to composite
-    bool hasValidOverlay() const { return has_content_; }
+    bool hasValidOverlay() const { return has_content_ && texture_valid_; }
 
 private:
     bool createTexture();
@@ -64,11 +72,15 @@ private:
     uint32_t width_ = 0;
     uint32_t height_ = 0;
 
-    // Overlay texture
-    GLuint texture_ = 0;
+    // CEF texture - stores raw CEF frame at CEF's painted size (independent of viewport)
+    GLuint cef_texture_ = 0;
+    int cef_texture_width_ = 0;
+    int cef_texture_height_ = 0;
     bool has_content_ = false;
+    bool texture_valid_ = false;  // Set false on RECREATE, true when we get non-black frame
 
-    // Double-buffered PBOs for async texture upload (software path)
+    // Legacy texture/PBO for compatibility (will be removed)
+    GLuint texture_ = 0;
     GLuint pbos_[2] = {0, 0};
     int current_pbo_ = 0;
     void* pbo_mapped_ = nullptr;
@@ -81,9 +93,16 @@ private:
     GLuint program_ = 0;
     GLint alpha_loc_ = -1;
     GLint swizzle_loc_ = -1;
+    GLint tex_size_loc_ = -1;
+    GLint view_size_loc_ = -1;
+    GLint sampler_loc_ = -1;
 
     // VAO for fullscreen quad
     GLuint vao_ = 0;
+
+    // Unique texture unit for this compositor (prevents interference between compositors)
+    int texture_unit_ = 0;
+    int log_count_ = 0;  // Per-instance log counter
 
 #if !defined(__APPLE__) && !defined(_WIN32)
     // Dmabuf import (Linux only)

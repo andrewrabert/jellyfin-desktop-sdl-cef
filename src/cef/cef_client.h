@@ -129,6 +129,7 @@ public:
     void undo() override;
     void redo() override;
     void resize(int width, int height);
+    void forceRepaint();
     void loadUrl(const std::string& url);
 
     // Override scale factor (0 = use physical/logical ratio)

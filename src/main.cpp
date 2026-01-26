@@ -241,6 +241,7 @@ int main(int argc, char* argv[]) {
 
     // Parse arguments (main process only)
     SDL_LogPriority log_level = SDL_LOG_PRIORITY_INFO;
+    bool use_dmabuf = false;  // Disable DMA-BUF by default (can cause system freezes)
     if (!is_cef_subprocess) {
         const char* log_level_str = nullptr;
         const char* log_file_path = nullptr;
@@ -251,7 +252,11 @@ int main(int argc, char* argv[]) {
                        "  -h, --help              Show this help message\n"
                        "  -v, --version           Show version information\n"
                        "  --log-level <level>     Set log level (verbose|debug|info|warn|error)\n"
-                       "  --log-file <path>       Write logs to file (with timestamps)\n");
+                       "  --log-file <path>       Write logs to file (with timestamps)\n"
+#if !defined(__APPLE__) && !defined(_WIN32)
+                       "  --dmabuf                Enable DMA-BUF zero-copy CEF rendering (experimental)\n"
+#endif
+                       );
                 return 0;
             } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--version") == 0) {
                 if (APP_GIT_HASH[0]) {
@@ -270,6 +275,8 @@ int main(int argc, char* argv[]) {
                 log_file_path = (i + 1 < argc && argv[i+1][0] != '-') ? argv[++i] : "";
             } else if (strncmp(argv[i], "--log-file=", 11) == 0) {
                 log_file_path = argv[i] + 11;
+            } else if (strcmp(argv[i], "--dmabuf") == 0) {
+                use_dmabuf = true;
             } else if (argv[i][0] == '-') {
                 fprintf(stderr, "Unknown option: %s\n", argv[i]);
                 return 1;
@@ -302,6 +309,11 @@ int main(int argc, char* argv[]) {
             LOG_INFO(LOG_MAIN, "jellyfin-desktop-cef %s built " __DATE__ " " __TIME__, APP_VERSION);
         }
         LOG_INFO(LOG_MAIN, "CEF " CEF_VERSION);
+#if !defined(__APPLE__) && !defined(_WIN32)
+        if (use_dmabuf) {
+            LOG_INFO(LOG_MAIN, "DMA-BUF zero-copy CEF rendering enabled (experimental)");
+        }
+#endif
     }
 
 #ifdef __APPLE__
@@ -670,7 +682,8 @@ int main(int argc, char* argv[]) {
     // Windows: multi_threaded_message_loop is supported
     settings.multi_threaded_message_loop = true;
 #else
-    settings.multi_threaded_message_loop = true;
+    // Linux: use external_message_pump for synchronous paint during resize
+    settings.external_message_pump = true;
 #endif
 
 #ifdef __APPLE__
@@ -741,6 +754,7 @@ int main(int argc, char* argv[]) {
     std::atomic<int> paint_write_idx{0};  // CEF writes here
     std::mutex paint_swap_mutex;  // Only held during buffer swap
     int paint_width = 0, paint_height = 0;
+    bool paint_size_matched = true;  // Track if last paint matched compositor size
 
     // Helper to flush paint buffer to compositor (used by both macOS and Linux paths)
     auto flushPaintBuffer = [&]() {
@@ -748,10 +762,10 @@ int main(int argc, char* argv[]) {
         int read_idx = 1 - paint_write_idx.load(std::memory_order_acquire);
         auto& buf = paint_buffers[read_idx];
         if (buf.dirty && !buf.data.empty()) {
-            void* staging = compositor.getStagingBuffer(buf.width, buf.height);
-            if (staging) {
-                memcpy(staging, buf.data.data(), buf.width * buf.height * 4);
-                compositor.markStagingDirty();
+            compositor.updateOverlayPartial(buf.data.data(), buf.width, buf.height);
+            if (buf.width == static_cast<int>(compositor.width()) &&
+                buf.height == static_cast<int>(compositor.height())) {
+                paint_size_matched = true;
             }
             buf.dirty = false;
         }
@@ -844,17 +858,7 @@ int main(int argc, char* argv[]) {
                 LOG_DEBUG(LOG_OVERLAY, "first paint callback: %dx%d", w, h);
                 first_overlay_paint = false;
             }
-            void* staging = overlay_compositor.getStagingBuffer(w, h);
-            if (staging) {
-                memcpy(staging, buffer, w * h * 4);
-                overlay_compositor.markStagingDirty();
-            } else {
-                static bool warned = false;
-                if (!warned) {
-                    LOG_WARN(LOG_OVERLAY, "getStagingBuffer returned null for %dx%d", w, h);
-                    warned = true;
-                }
-            }
+            overlay_compositor.updateOverlayPartial(buffer, w, h);
         },
         [&](const std::string& url) {
             // loadServer callback - start loading main browser
@@ -879,10 +883,9 @@ int main(int argc, char* argv[]) {
 
     CefRefPtr<Client> client(new Client(width, height,
         [&](const void* buffer, int w, int h) {
-            static bool first_paint = true;
-            if (first_paint) {
-                LOG_DEBUG(LOG_CEF, "first paint callback: %dx%d", w, h);
-                first_paint = false;
+            static int paint_count = 0;
+            if (paint_count++ % 100 == 0) {
+                LOG_DEBUG(LOG_CEF, "main browser paint #%d: %dx%d", paint_count, w, h);
             }
             // Write to back buffer without blocking
             int write_idx = paint_write_idx.load(std::memory_order_relaxed);
@@ -949,7 +952,12 @@ int main(int argc, char* argv[]) {
 
     CefWindowInfo window_info;
     window_info.SetAsWindowless(0);
+#if !defined(__APPLE__) && !defined(_WIN32)
+    window_info.shared_texture_enabled = use_dmabuf;
+#else
     window_info.shared_texture_enabled = true;
+    (void)use_dmabuf;  // Suppress unused variable warning
+#endif
 
     CefBrowserSettings browser_settings;
     browser_settings.background_color = 0;
@@ -968,7 +976,11 @@ int main(int argc, char* argv[]) {
     // Create overlay browser loading index.html
     CefWindowInfo overlay_window_info;
     overlay_window_info.SetAsWindowless(0);
+#if !defined(__APPLE__) && !defined(_WIN32)
+    overlay_window_info.shared_texture_enabled = use_dmabuf;
+#else
     overlay_window_info.shared_texture_enabled = true;
+#endif
     CefBrowserSettings overlay_browser_settings;
     overlay_browser_settings.background_color = 0;
     overlay_browser_settings.windowless_frame_rate = browser_settings.windowless_frame_rate;
@@ -1029,7 +1041,11 @@ int main(int argc, char* argv[]) {
     bool video_ready = false;  // Latches true once first frame renders
 #ifdef __APPLE__
     bool window_activated = false;  // Activate window on first expose event
+#endif
+#ifndef _WIN32
     auto last_cef_work = Clock::now();
+    auto last_resize_pump = Clock::now() - std::chrono::milliseconds(100);  // Allow immediate first pump
+    auto last_resize_time = Clock::now() - std::chrono::seconds(10);  // Track when resize stopped
     // Calculate pump interval based on display refresh rate (e.g., 8ms for 120Hz, 16ms for 60Hz)
     int cef_pump_interval_ms = (mode && mode->refresh_rate > 0) ? static_cast<int>(1000.0f / mode->refresh_rate) : 16;
     LOG_DEBUG(LOG_CEF, "CEF pump interval: %dms", cef_pump_interval_ms);
@@ -1254,11 +1270,7 @@ int main(int argc, char* argv[]) {
                 int read_idx = 1 - ctx->paint_write_idx->load(std::memory_order_acquire);
                 auto& buf = (*ctx->paint_buffers)[read_idx];
                 if (buf.dirty && !buf.data.empty()) {
-                    void* staging = ctx->compositor->getStagingBuffer(buf.width, buf.height);
-                    if (staging) {
-                        memcpy(staging, buf.data.data(), buf.width * buf.height * 4);
-                        ctx->compositor->markStagingDirty();
-                    }
+                    ctx->compositor->updateOverlayPartial(buf.data.data(), buf.width, buf.height);
                     buf.dirty = false;
                 }
             }
@@ -1300,9 +1312,10 @@ int main(int argc, char* argv[]) {
         mediaSession.update();
 
         // Event-driven: wait for events when idle, poll when active
+        bool has_pending = compositor.hasPendingContent() || overlay_compositor.hasPendingContent();
         SDL_Event event;
         bool have_event;
-        if (needs_render || has_video || compositor.hasPendingContent()) {
+        if (needs_render || has_video || has_pending || !paint_size_matched) {
             have_event = SDL_PollEvent(&event);
         } else {
             // Short wait - just yield CPU, don't block long (1ms for ~1000Hz max)
@@ -1383,7 +1396,7 @@ int main(int argc, char* argv[]) {
                     fullscreen_source = FullscreenSource::NONE;
                 }
             } else if (event.type == SDL_EVENT_WINDOW_RESIZED) {
-                auto resize_start = std::chrono::steady_clock::now();
+                paint_size_matched = false;  // Keep rendering until paint matches new size
                 current_width = event.window.data1;
                 current_height = event.window.data2;
                 overlay_browser_layer.setWindowSize(current_width, current_height);
@@ -1391,9 +1404,8 @@ int main(int argc, char* argv[]) {
 
 #ifdef __APPLE__
                 // Resize Metal compositor and video layer
-                float scale = SDL_GetWindowDisplayScale(window);
-                int physical_w = static_cast<int>(current_width * scale);
-                int physical_h = static_cast<int>(current_height * scale);
+                int physical_w, physical_h;
+                SDL_GetWindowSizeInPixels(window, &physical_w, &physical_h);
                 compositor.resize(physical_w, physical_h);
                 overlay_compositor.resize(physical_w, physical_h);
                 client->resize(current_width, current_height);
@@ -1412,9 +1424,8 @@ int main(int argc, char* argv[]) {
                 video_needs_rerender = true;  // Force video rerender on resize
 #else
                 // Resize EGL context and compositors with physical dimensions
-                float scale = SDL_GetWindowDisplayScale(window);
-                int physical_w = static_cast<int>(current_width * scale);
-                int physical_h = static_cast<int>(current_height * scale);
+                int physical_w, physical_h;
+                SDL_GetWindowSizeInPixels(window, &physical_w, &physical_h);
                 egl.resize(physical_w, physical_h);
                 compositor.resize(physical_w, physical_h);
                 overlay_compositor.resize(physical_w, physical_h);
@@ -1430,11 +1441,17 @@ int main(int argc, char* argv[]) {
                     waylandSubsurface.setDestinationSize(current_width, current_height);
                 }
                 video_needs_rerender = true;  // Force render even when paused
+
+                // Pump CEF at max 60fps during resize to avoid overwhelming it
+                auto now_resize = Clock::now();
+                last_resize_time = now_resize;
+                auto since_pump = std::chrono::duration_cast<std::chrono::milliseconds>(now_resize - last_resize_pump).count();
+                if (since_pump >= 16) {
+                    CefDoMessageLoopWork();
+                    last_resize_pump = now_resize;
+                }
 #endif
 
-                auto resize_end = std::chrono::steady_clock::now();
-                LOG_DEBUG(LOG_WINDOW, "[%ldms] resize: total=%ldms", _ms(),
-                          std::chrono::duration_cast<std::chrono::milliseconds>(resize_end-resize_start).count());
             } else if (event.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED) {
                 float new_scale = SDL_GetWindowDisplayScale(window);
 
@@ -1471,8 +1488,8 @@ int main(int argc, char* argv[]) {
             have_event = SDL_PollEvent(&event);
         }
 
-#ifdef __APPLE__
-        // macOS: external_message_pump - call CefDoMessageLoopWork when CEF requests it
+#ifndef _WIN32
+        // macOS/Linux: external_message_pump - call CefDoMessageLoopWork when CEF requests it
         if (App::NeedsWork()) {
             int64_t delay_ms = App::GetWorkDelay();
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_cef_work).count();
@@ -1493,6 +1510,16 @@ int main(int argc, char* argv[]) {
 
         // Determine if we need to render this frame
         needs_render = activity_this_frame || has_video || compositor.hasPendingContent() || overlay_state == OverlayState::FADING;
+#ifndef _WIN32
+        // Keep rendering after resize until texture updates or 5 seconds pass
+        auto since_resize = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_resize_time).count();
+        bool resize_pending = since_resize < 5000 && !paint_size_matched;
+        if (resize_pending) {
+            needs_render = true;
+            client->forceRepaint();
+            CefDoMessageLoopWork();
+        }
+#endif
 
         // Process player commands
         {

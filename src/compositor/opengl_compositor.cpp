@@ -1,5 +1,7 @@
 #include "compositor/opengl_compositor.h"
+#include <algorithm>
 #include <cstring>
+#include <vector>
 #include "logging.h"
 
 #if !defined(__APPLE__) && !defined(_WIN32)
@@ -125,27 +127,35 @@ void main() {
 )";
 #else
 // Linux: OpenGL ES 3.0
+// Render CEF texture at 1:1 pixels using gl_FragCoord
 static const char* vert_src = R"(#version 300 es
-out vec2 texCoord;
 void main() {
+    // Fullscreen triangle
     vec2 pos = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
-    texCoord = vec2(pos.x, 1.0 - pos.y);
     gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
 }
 )";
 
 static const char* frag_src = R"(#version 300 es
 precision mediump float;
-in vec2 texCoord;
 out vec4 fragColor;
 uniform sampler2D overlayTex;
 uniform float alpha;
-uniform float swizzleBgra;  // 1.0 = swizzle BGRA->RGBA (PBO path), 0.0 = no swizzle (dmabuf)
+uniform float swizzleBgra;
+uniform vec2 texSize;
+uniform vec2 viewSize;
 void main() {
-    vec4 color = texture(overlayTex, texCoord);
-    // Mix between direct color and BGRA swizzle based on uniform
-    vec4 swizzled = color.bgra;
-    fragColor = mix(color, swizzled, swizzleBgra) * alpha;
+    int px = int(gl_FragCoord.x);
+    // Flip Y using viewport height so texture anchors to TOP
+    int tex_y = int(viewSize.y) - 1 - int(gl_FragCoord.y);
+
+    // Out of bounds = transparent (let background show through)
+    if (px < 0 || tex_y < 0 || px >= int(texSize.x) || tex_y >= int(texSize.y)) {
+        discard;
+    }
+
+    vec4 color = texelFetch(overlayTex, ivec2(px, tex_y), 0);
+    fragColor = color.bgra * alpha;
 }
 )";
 #endif
@@ -160,6 +170,11 @@ bool OpenGLCompositor::init(GLContext* ctx, uint32_t width, uint32_t height) {
     ctx_ = ctx;
     width_ = width;
     height_ = height;
+
+    // Assign unique texture unit to this compositor instance
+    static int next_texture_unit = 0;
+    texture_unit_ = next_texture_unit++;
+    LOG_INFO(LOG_COMPOSITOR, "Compositor initialized with texture unit %d", texture_unit_);
 
 #ifdef _WIN32
     loadWGLExtensions();
@@ -312,6 +327,9 @@ bool OpenGLCompositor::createShader() {
     // Get uniform locations
     alpha_loc_ = glGetUniformLocation(program_, "alpha");
     swizzle_loc_ = glGetUniformLocation(program_, "swizzleBgra");
+    tex_size_loc_ = glGetUniformLocation(program_, "texSize");
+    view_size_loc_ = glGetUniformLocation(program_, "viewSize");
+    sampler_loc_ = glGetUniformLocation(program_, "overlayTex");
 
     return true;
 }
@@ -330,10 +348,56 @@ void OpenGLCompositor::updateOverlay(const void* data, int width, int height) {
 }
 
 void* OpenGLCompositor::getStagingBuffer(int width, int height) {
-    if (width != static_cast<int>(width_) || height != static_cast<int>(height_)) {
-        return nullptr;
-    }
+    // Accept any size - caller will use updateOverlayPartial for mismatched sizes
+    (void)width; (void)height;
     return pbo_mapped_;
+}
+
+void OpenGLCompositor::updateOverlayPartial(const void* data, int src_width, int src_height) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (!data || src_width <= 0 || src_height <= 0) return;
+
+    // Recreate CEF texture if size changed or texture doesn't exist
+    if (cef_texture_ == 0 || src_width != cef_texture_width_ || src_height != cef_texture_height_) {
+        LOG_DEBUG(LOG_COMPOSITOR, "updateOverlayPartial: RECREATE %dx%d -> %dx%d (viewport=%ux%u)",
+                  cef_texture_width_, cef_texture_height_, src_width, src_height, width_, height_);
+        if (cef_texture_) {
+            glDeleteTextures(1, &cef_texture_);
+        }
+        glGenTextures(1, &cef_texture_);
+        glBindTexture(GL_TEXTURE_2D, cef_texture_);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);  // No interpolation for 1:1
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        // Reset pixel unpack state before texture allocation
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+        glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, src_width, src_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        cef_texture_width_ = src_width;
+        cef_texture_height_ = src_height;
+        texture_valid_ = false;  // Need valid data before rendering
+        LOG_DEBUG(LOG_COMPOSITOR, "Created CEF texture %dx%d", src_width, src_height);
+    }
+
+    // Upload CEF frame directly to texture
+    // Reset pixel unpack state to ensure no offset/stride issues
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+    glBindTexture(GL_TEXTURE_2D, cef_texture_);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, src_width, src_height, GL_RGBA, GL_UNSIGNED_BYTE, data);
+    texture_valid_ = true;
+
+    // Force GPU to complete upload before we return - rules out async issues
+    glFinish();
+
+    has_content_ = true;
 }
 
 bool OpenGLCompositor::flushOverlay() {
@@ -342,6 +406,8 @@ bool OpenGLCompositor::flushOverlay() {
     if (!staging_pending_ || !texture_) {
         return false;
     }
+
+    LOG_DEBUG(LOG_COMPOSITOR, "flushOverlay: uploading %ux%u", width_, height_);
 
     size_t pbo_size = width_ * height_ * 4;
 
@@ -521,21 +587,46 @@ void OpenGLCompositor::composite(uint32_t width, uint32_t height, float alpha) {
 
     glUseProgram(program_);
     glUniform1f(alpha_loc_, alpha);
+    if (view_size_loc_ >= 0) glUniform2f(view_size_loc_, static_cast<float>(width), static_cast<float>(height));
 
-    glActiveTexture(GL_TEXTURE0);
+    // Use this compositor's dedicated texture unit to prevent interference
+    glActiveTexture(GL_TEXTURE0 + texture_unit_);
+    if (sampler_loc_ >= 0) glUniform1i(sampler_loc_, texture_unit_);
+
 #if !defined(__APPLE__) && !defined(_WIN32)
-    // Use dmabuf texture if available, otherwise fallback to PBO texture
-    if (use_dmabuf_ && dmabuf_texture_) {
-        glBindTexture(GL_TEXTURE_2D, dmabuf_texture_);
-        // dmabuf import handles format - no swizzle needed
-        if (swizzle_loc_ >= 0) glUniform1f(swizzle_loc_, 0.0f);
-    } else {
-        glBindTexture(GL_TEXTURE_2D, texture_);
-        // PBO path uploads BGRA as GL_RGBA - need swizzle
-        if (swizzle_loc_ >= 0) glUniform1f(swizzle_loc_, 1.0f);
+    // Bind texture and get dimensions under lock to prevent race with updateOverlayPartial
+    GLuint tex_to_use = 0;
+    int tex_w = 0, tex_h = 0;
+    bool use_cef = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (use_dmabuf_ && dmabuf_texture_) {
+            tex_to_use = dmabuf_texture_;
+            tex_w = dmabuf_width_;
+            tex_h = dmabuf_height_;
+            glBindTexture(GL_TEXTURE_2D, tex_to_use);
+            if (swizzle_loc_ >= 0) glUniform1f(swizzle_loc_, 0.0f);
+            if (log_count_++ < 3) LOG_INFO(LOG_COMPOSITOR, "composite: DMABUF tex=%u size=%dx%d view=%ux%u", tex_to_use, tex_w, tex_h, width, height);
+        } else if (cef_texture_) {
+            tex_to_use = cef_texture_;
+            tex_w = cef_texture_width_;
+            tex_h = cef_texture_height_;
+            use_cef = true;
+            glBindTexture(GL_TEXTURE_2D, tex_to_use);
+            if (swizzle_loc_ >= 0) glUniform1f(swizzle_loc_, 1.0f);
+        } else {
+            tex_to_use = texture_;
+            tex_w = width_;
+            tex_h = height_;
+            glBindTexture(GL_TEXTURE_2D, tex_to_use);
+            if (swizzle_loc_ >= 0) glUniform1f(swizzle_loc_, 1.0f);
+            if (log_count_++ < 3) LOG_INFO(LOG_COMPOSITOR, "composite: LEGACY tex=%u size=%dx%d view=%ux%u", tex_to_use, tex_w, tex_h, width, height);
+        }
     }
+    if (tex_size_loc_ >= 0) glUniform2f(tex_size_loc_, static_cast<float>(tex_w), static_cast<float>(tex_h));
 #else
     glBindTexture(GL_TEXTURE_2D, texture_);
+    if (tex_size_loc_ >= 0) glUniform2f(tex_size_loc_, static_cast<float>(width_), static_cast<float>(height_));
 #endif
 
     glBindVertexArray(vao_);
@@ -546,22 +637,24 @@ void OpenGLCompositor::composite(uint32_t width, uint32_t height, float alpha) {
 }
 
 void OpenGLCompositor::resize(uint32_t width, uint32_t height) {
-    LOG_DEBUG(LOG_COMPOSITOR, "[%ldms] resize: %ux%u (current: %ux%u)", _comp_ms(), width, height, width_, height_);
+    LOG_DEBUG(LOG_COMPOSITOR, "[%ldms] resize: viewport %ux%u -> %ux%u (CEF texture %dx%d)",
+              _comp_ms(), width_, height_, width, height, cef_texture_width_, cef_texture_height_);
 
-    if (width == width_ && height == height_) {
+    if (width == 0 || height == 0 || (width == width_ && height == height_)) {
         return;
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
 
-    destroyTexture();
-
+    // Just update viewport dimensions - CEF texture is independent
     width_ = width;
     height_ = height;
-    has_content_ = false;
 
-    createTexture();
-    LOG_DEBUG(LOG_COMPOSITOR, "[%ldms] resize: done", _comp_ms());
+    // Recreate legacy texture/PBOs at new size (needed for flushOverlay compatibility)
+    destroyTexture();
+    if (!createTexture()) {
+        LOG_ERROR(LOG_COMPOSITOR, "createTexture failed during resize");
+    }
 }
 
 void OpenGLCompositor::destroyTexture() {
@@ -602,6 +695,14 @@ void OpenGLCompositor::cleanup() {
     if (!ctx_) return;
 
     destroyTexture();
+
+    // Clean up CEF texture
+    if (cef_texture_) {
+        glDeleteTextures(1, &cef_texture_);
+        cef_texture_ = 0;
+        cef_texture_width_ = 0;
+        cef_texture_height_ = 0;
+    }
 
     if (program_) {
         glDeleteProgram(program_);
