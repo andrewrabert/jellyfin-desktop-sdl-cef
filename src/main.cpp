@@ -771,6 +771,21 @@ int main(int argc, char* argv[]) {
         }
     };
 
+    // Double-buffer for overlay paint callbacks (same pattern as main browser)
+    std::array<PaintBuffer, 2> overlay_paint_buffers;
+    std::atomic<int> overlay_paint_write_idx{0};
+    std::mutex overlay_paint_swap_mutex;
+
+    auto flushOverlayPaintBuffer = [&]() {
+        std::lock_guard<std::mutex> lock(overlay_paint_swap_mutex);
+        int read_idx = 1 - overlay_paint_write_idx.load(std::memory_order_acquire);
+        auto& buf = overlay_paint_buffers[read_idx];
+        if (buf.dirty && !buf.data.empty()) {
+            overlay_compositor.updateOverlayPartial(buf.data.data(), buf.width, buf.height);
+            buf.dirty = false;
+        }
+    };
+
     // Player command queue
     struct PlayerCmd {
         std::string cmd;
@@ -858,7 +873,23 @@ int main(int argc, char* argv[]) {
                 LOG_DEBUG(LOG_OVERLAY, "first paint callback: %dx%d", w, h);
                 first_overlay_paint = false;
             }
-            overlay_compositor.updateOverlayPartial(buffer, w, h);
+            // Write to back buffer without blocking (same pattern as main browser)
+            int write_idx = overlay_paint_write_idx.load(std::memory_order_relaxed);
+            auto& buf = overlay_paint_buffers[write_idx];
+            size_t size = w * h * 4;
+            if (buf.data.size() < size) {
+                buf.data.resize(size);
+            }
+            memcpy(buf.data.data(), buffer, size);
+            buf.width = w;
+            buf.height = h;
+
+            // Swap buffers (brief lock)
+            {
+                std::lock_guard<std::mutex> lock(overlay_paint_swap_mutex);
+                buf.dirty = true;
+                overlay_paint_write_idx.store(1 - write_idx, std::memory_order_release);
+            }
         },
         [&](const std::string& url) {
             // loadServer callback - start loading main browser
@@ -1206,6 +1237,10 @@ int main(int argc, char* argv[]) {
         std::array<PaintBuffer, 2>* paint_buffers;
         std::atomic<int>* paint_write_idx;
         std::mutex* paint_swap_mutex;
+        // Paint buffer access for overlay browser
+        std::array<PaintBuffer, 2>* overlay_paint_buffers;
+        std::atomic<int>* overlay_paint_write_idx;
+        std::mutex* overlay_paint_swap_mutex;
     };
     LiveResizeContext live_resize_ctx = {
         window,
@@ -1223,7 +1258,10 @@ int main(int argc, char* argv[]) {
         &overlay_state,
         &paint_buffers,
         &paint_write_idx,
-        &paint_swap_mutex
+        &paint_swap_mutex,
+        &overlay_paint_buffers,
+        &overlay_paint_write_idx,
+        &overlay_paint_swap_mutex
     };
 
     auto liveResizeCallback = [](void* userdata, SDL_Event* event) -> bool {
@@ -1281,6 +1319,16 @@ int main(int argc, char* argv[]) {
             }
 
             if (*ctx->overlay_state != OverlayState::HIDDEN && *ctx->overlay_browser_alpha > 0.01f) {
+                // Flush overlay paint buffer
+                {
+                    std::lock_guard<std::mutex> lock(*ctx->overlay_paint_swap_mutex);
+                    int read_idx = 1 - ctx->overlay_paint_write_idx->load(std::memory_order_acquire);
+                    auto& buf = (*ctx->overlay_paint_buffers)[read_idx];
+                    if (buf.dirty && !buf.data.empty()) {
+                        ctx->overlay_compositor->updateOverlayPartial(buf.data.data(), buf.width, buf.height);
+                        buf.dirty = false;
+                    }
+                }
                 if (ctx->overlay_compositor->hasValidOverlay() || ctx->overlay_compositor->hasPendingContent()) {
                     ctx->overlay_compositor->composite(*ctx->current_width, *ctx->current_height, *ctx->overlay_browser_alpha);
                 }
@@ -1742,6 +1790,7 @@ int main(int argc, char* argv[]) {
 
         // Composite overlay browser (with fade alpha)
         if (overlay_state != OverlayState::HIDDEN && overlay_browser_alpha > 0.01f) {
+            flushOverlayPaintBuffer();
             if (overlay_compositor.hasValidOverlay() || overlay_compositor.hasPendingContent()) {
                 overlay_compositor.composite(current_width, current_height, overlay_browser_alpha);
             }
@@ -1769,6 +1818,7 @@ int main(int argc, char* argv[]) {
 
         // Composite overlay browser (with fade alpha)
         if (overlay_state != OverlayState::HIDDEN && overlay_browser_alpha > 0.01f) {
+            flushOverlayPaintBuffer();
             overlay_compositor.flushOverlay();
             if (overlay_compositor.hasValidOverlay()) {
                 overlay_compositor.composite(current_width, current_height, overlay_browser_alpha);
@@ -1834,6 +1884,7 @@ int main(int argc, char* argv[]) {
 
         // Composite overlay browser (with fade alpha)
         if (overlay_state != OverlayState::HIDDEN && overlay_browser_alpha > 0.01f) {
+            flushOverlayPaintBuffer();
             overlay_compositor.importQueuedDmabuf();
             overlay_compositor.flushOverlay();
             if (overlay_compositor.hasValidOverlay()) {
