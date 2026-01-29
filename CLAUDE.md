@@ -1,5 +1,8 @@
 # Project Notes
 
+## Constraints
+- **No artificial heartbeats/polling** - event-driven architecture only. Never use timeouts as a workaround for proper event integration.
+
 ## Build
 ```
 cmake --build build
