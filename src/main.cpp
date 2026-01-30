@@ -31,6 +31,13 @@ void activateMacWindow(SDL_Window* window);
 void waitForMacEvent();
 // Wake the NSApplication event loop from another thread
 void wakeMacEventLoop();
+#elif defined(_WIN32)
+// Initialize message-only window for CEF wake-ups
+void initWindowsMessageWindow();
+// Wake the Windows event loop from another thread
+void wakeWindowsEventLoop();
+// Clean up message window
+void cleanupWindowsMessageWindow();
 #endif
 
 #ifdef __APPLE__
@@ -56,7 +63,6 @@ void wakeMacEventLoop();
 #include "player/video_render_thread.h"
 #include "cef/cef_app.h"
 #include "cef/cef_client.h"
-#include "cef/cef_thread.h"
 #include "browser/browser_stack.h"
 #include "input/input_layer.h"
 #include "input/browser_layer.h"
@@ -396,14 +402,14 @@ int main(int argc, char* argv[]) {
 #ifdef __APPLE__
         // Wake NSApplication event loop (we use waitForMacEvent instead of SDL_WaitEvent)
         wakeMacEventLoop();
+#elif defined(_WIN32)
+        // Wake Windows message loop
+        wakeWindowsEventLoop();
 #endif
     };
 
-#ifdef __APPLE__
-    // macOS: CEF uses external_message_pump, so we need to wake the main loop
-    // when CEF schedules work (otherwise SDL_WaitEvent blocks indefinitely)
+    // All platforms: CEF uses external_message_pump, wake main loop when work is scheduled
     App::SetWakeCallback(wakeMainLoop);
-#endif
 
     const int width = 1280;
     const int height = 720;
@@ -523,7 +529,7 @@ int main(int argc, char* argv[]) {
     // Load settings
     Settings::instance().load();
 
-    // CEF settings (CefThread sets external_message_pump)
+    // CEF settings (external_message_pump set below per platform)
     CefSettings settings;
     settings.no_sandbox = true;
     settings.windowless_rendering_enabled = true;
@@ -587,8 +593,14 @@ int main(int argc, char* argv[]) {
     auto main_compositor = std::make_unique<MetalCompositor>();
     main_compositor->init(window, physical_width, physical_height);
     LOG_DEBUG(LOG_COMPOSITOR, "Pre-created main Metal compositor");
+#endif
 
-    // macOS: Use external_message_pump on main thread (CEF doesn't handle separate thread well)
+#ifdef _WIN32
+    // Initialize message-only window for CEF wake-ups before CefInitialize
+    initWindowsMessageWindow();
+#endif
+
+    // All platforms: Use external_message_pump on main thread
     settings.external_message_pump = true;
     if (!CefInitialize(main_args, settings, app, nullptr)) {
         LOG_ERROR(LOG_CEF, "CefInitialize failed");
@@ -597,16 +609,6 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     LOG_INFO(LOG_CEF, "CEF context initialized");
-#else
-    // Windows/Linux: Start CEF on dedicated thread
-    CefThread cefThread;
-    if (!cefThread.start(main_args, settings, app)) {
-        LOG_ERROR(LOG_CEF, "CefThread start failed");
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
-    }
-#endif
 
     // Browser stack manages all browsers and their paint buffers
     BrowserStack browsers;
@@ -1004,10 +1006,8 @@ int main(int argc, char* argv[]) {
     SDL_AddEventWatch(liveResizeCallback, &live_resize_ctx);
 #endif
 
-#ifdef __APPLE__
     // Initial CEF pump to kick off work scheduling
     App::DoWork();
-#endif
 
     // Main loop - simplified (no Vulkan command buffers for main surface)
     bool running = true;
@@ -1122,9 +1122,8 @@ int main(int argc, char* argv[]) {
         if (needs_render || has_video || has_pending || has_pending_cmds || !paint_size_matched) {
             have_event = SDL_PollEvent(&event);
         } else {
-#ifdef __APPLE__
-            // Pump CEF before waiting - this processes any pending tasks and
-            // may schedule more work (which will wake us via OnScheduleMessagePumpWork)
+            // All platforms: Pump CEF before waiting - this processes any pending tasks
+            // and may schedule more work (which will wake us via OnScheduleMessagePumpWork)
             App::DoWork();
 
             // Re-check if CEF work generated content
@@ -1136,15 +1135,16 @@ int main(int argc, char* argv[]) {
             if (has_pending || has_pending_cmds) {
                 have_event = SDL_PollEvent(&event);
             } else {
+#ifdef __APPLE__
                 // Wait using NSApplication's event loop - properly integrates
                 // Cocoa events, CFRunLoop sources, and Mojo IPC
                 waitForMacEvent();
                 have_event = SDL_PollEvent(&event);
-            }
 #else
-            // Idle: block until SDL event (input, window, or CEF wake callback)
-            have_event = SDL_WaitEvent(&event);
+                // Linux/Windows: SDL_WaitEvent works with wake callback (pushes SDL event)
+                have_event = SDL_WaitEvent(&event);
 #endif
+            }
         }
 
         while (have_event) {
@@ -1292,10 +1292,8 @@ int main(int argc, char* argv[]) {
             have_event = SDL_PollEvent(&event);
         }
 
-#ifdef __APPLE__
-        // macOS: Always pump CEF - scheduling controls actual work frequency
+        // All platforms: Always pump CEF - scheduling controls actual work frequency
         App::DoWork();
-#endif
 
         // Determine if we need to render this frame
         needs_render = activity_this_frame || has_video || browsers.anyHasPendingContent() || overlay_state == OverlayState::FADING;
@@ -1580,28 +1578,17 @@ int main(int argc, char* argv[]) {
     mpvEvents.stop();
     mpv->cleanup();
 
-#ifdef __APPLE__
-    // macOS: simpler cleanup - CefShutdown handles browser cleanup
-    browsers.cleanupCompositors();
-    videoRenderer.cleanup();
-    VideoStack::cleanupStatics();
-    CefShutdown();
-#else
-    // Windows/Linux: wait for async browser close before cleanup
-    browsers.closeAllBrowsers();
-    while (!browsers.allBrowsersClosed()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
+    // All platforms: CefShutdown handles browser cleanup
     browsers.cleanupCompositors();
     videoRenderer.cleanup();
     VideoStack::cleanupStatics();
 #ifdef _WIN32
     wgl.cleanup();
-#else
+    cleanupWindowsMessageWindow();
+#elif !defined(__APPLE__)
     egl.cleanup();
 #endif
-    cefThread.shutdown();
-#endif
+    CefShutdown();
     shutdownStderrCapture();
     shutdownLogging();
     if (current_cursor) {

@@ -95,6 +95,7 @@ elseif(WIN32)
         src/context/wgl_context.cpp
         src/context/opengl_frame_context.cpp
         src/platform/windows_video_layer.cpp
+        src/platform/windows_app.cpp
         src/compositor/opengl_compositor.cpp
         src/player/media_session.cpp
     )
@@ -295,7 +296,6 @@ set(COMMON_SOURCES
     src/browser/browser_stack.cpp
     src/cef/cef_app.cpp
     src/cef/cef_client.cpp
-    src/cef/cef_thread.cpp
     src/cef/resource_handler.cpp
     src/context/vulkan_context.cpp
     src/player/mpv/mpv_player_gl.cpp
