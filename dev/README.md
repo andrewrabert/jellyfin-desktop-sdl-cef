@@ -23,6 +23,16 @@ cd jellyfin-desktop-cef
 .\dev\windows\build.ps1
 ```
 
+## Flatpak (Linux)
+
+See [dev/flatpak/README.md](flatpak/README.md) for details.
+
+```sh
+cd dev/flatpak
+./build.sh
+flatpak install --user jellyfin-desktop-cef.flatpak
+```
+
 ## Web Debugger
 
 To get browser devtools, use remote debugging:
