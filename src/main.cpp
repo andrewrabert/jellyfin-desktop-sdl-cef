@@ -851,7 +851,7 @@ int main(int argc, char* argv[]) {
 #ifdef __APPLE__
     window_info.shared_texture_enabled = true;  // macOS: use IOSurface zero-copy
 #elif defined(_WIN32)
-    window_info.shared_texture_enabled = true;
+    window_info.shared_texture_enabled = false;  // No DirectX interop yet, use OnPaint
 #else
     window_info.shared_texture_enabled = use_dmabuf;  // Linux: dmabuf zero-copy
 #endif
@@ -877,7 +877,7 @@ int main(int argc, char* argv[]) {
 #ifdef __APPLE__
     overlay_window_info.shared_texture_enabled = true;  // macOS: use IOSurface zero-copy
 #elif defined(_WIN32)
-    overlay_window_info.shared_texture_enabled = true;
+    overlay_window_info.shared_texture_enabled = false;  // No DirectX interop yet, use OnPaint
 #else
     overlay_window_info.shared_texture_enabled = use_dmabuf;  // Linux: dmabuf zero-copy
 #endif
@@ -1527,15 +1527,15 @@ int main(int argc, char* argv[]) {
         browsers.renderAll(current_width, current_height);
 #elif defined(_WIN32)
         // Windows: OpenGL mpv rendering directly to default framebuffer
-        // Render video first (underneath the browser UI)
+        glViewport(0, 0, current_width, current_height);
+        frameContext.beginFrame(clear_color, videoRenderer.getClearAlpha(video_ready));
+
+        // Render video (underneath the browser UI)
         if (has_video && (videoRenderer.hasFrame() || video_needs_rerender)) {
             videoRenderer.render(current_width, current_height);
             video_ready = true;
             video_needs_rerender = false;
         }
-
-        // Clear and composite
-        frameContext.beginFrame(clear_color, videoRenderer.getClearAlpha(video_ready));
 
         // Flush and composite all browsers (back-to-front order)
         browsers.renderAll(current_width, current_height);

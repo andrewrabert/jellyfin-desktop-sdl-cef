@@ -214,8 +214,13 @@ bool MpvPlayerGL::init(GLContext* gl) {
 
     int advanced_control = 1;
 
-    // Use gpu-next (libplacebo) backend for all platforms
+#ifdef _WIN32
+    // Windows/Wine: use legacy gpu backend (gpu-next ignores flip_y)
+    const char* backend = "gpu";
+#else
+    // Use gpu-next (libplacebo) backend for HDR support
     const char* backend = "gpu-next";
+#endif
 
     mpv_render_param params[] = {
         {MPV_RENDER_PARAM_API_TYPE, const_cast<char*>(MPV_RENDER_API_TYPE_OPENGL)},
@@ -370,8 +375,14 @@ bool MpvPlayerGL::hasFrame() const {
     return (mpv_render_context_update(render_ctx_) & MPV_RENDER_UPDATE_FRAME) != 0;
 }
 
-void MpvPlayerGL::render(int width, int height, int fbo) {
+void MpvPlayerGL::render(int width, int height, int fbo, bool flip) {
     if (!render_ctx_) return;
+
+    static bool first = true;
+    if (first) {
+        LOG_INFO(LOG_MPV, "render: %dx%d fbo=%d flip=%d", width, height, fbo, flip ? 1 : 0);
+        first = false;
+    }
 
     mpv_opengl_fbo fbo_params{};
     fbo_params.fbo = fbo;
@@ -379,7 +390,7 @@ void MpvPlayerGL::render(int width, int height, int fbo) {
     fbo_params.h = height;
     fbo_params.internal_format = 0;  // Let mpv decide
 
-    int flip_y = 1;  // Flip for screen rendering (video is top-down, GL is bottom-up)
+    int flip_y = flip ? 1 : 0;
 
     mpv_render_param params[] = {
         {MPV_RENDER_PARAM_OPENGL_FBO, &fbo_params},

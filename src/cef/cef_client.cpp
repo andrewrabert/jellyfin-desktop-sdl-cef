@@ -173,12 +173,17 @@ public:
         LOG_INFO(LOG_CEF, "Connectivity request complete: %s url=%s",
                  success ? "success" : "failed", resolved_url.c_str());
 
-        // Send result back to renderer
-        CefRefPtr<CefProcessMessage> msg = CefProcessMessage::Create("serverConnectivityResult");
-        msg->GetArgumentList()->SetString(0, original_url_);
-        msg->GetArgumentList()->SetBool(1, success);
-        msg->GetArgumentList()->SetString(2, resolved_url);
-        browser_->GetMainFrame()->SendProcessMessage(PID_RENDERER, msg);
+        // Send result back to renderer (if browser still valid)
+        auto frame = browser_ ? browser_->GetMainFrame() : nullptr;
+        if (frame) {
+            CefRefPtr<CefProcessMessage> msg = CefProcessMessage::Create("serverConnectivityResult");
+            msg->GetArgumentList()->SetString(0, original_url_);
+            msg->GetArgumentList()->SetBool(1, success);
+            msg->GetArgumentList()->SetString(2, resolved_url);
+            frame->SendProcessMessage(PID_RENDERER, msg);
+        } else {
+            LOG_DEBUG(LOG_CEF, "Connectivity result dropped - browser closed");
+        }
     }
 
     void OnUploadProgress(CefRefPtr<CefURLRequest> request, int64_t current, int64_t total) override {}
@@ -274,7 +279,9 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
         on_player_msg_("load", url, startMs, metadata);
         return true;
     } else if (name == "playerStop") {
+        LOG_DEBUG(LOG_CEF, "Calling on_player_msg_ for stop");
         on_player_msg_("stop", "", 0, "");
+        LOG_DEBUG(LOG_CEF, "on_player_msg_ returned for stop");
         return true;
     } else if (name == "playerPause") {
         on_player_msg_("pause", "", 0, "");

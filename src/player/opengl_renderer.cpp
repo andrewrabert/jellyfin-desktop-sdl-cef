@@ -8,6 +8,7 @@ bool OpenGLRenderer::hasFrame() const {
 }
 
 bool OpenGLRenderer::render(int width, int height) {
-    player_->render(width, height, 0);
+    // Always flip Y - video is top-down, GL framebuffer is bottom-up
+    player_->render(width, height, 0, true);
     return true;
 }

@@ -30,7 +30,8 @@ public:
     bool hasFrame() const override;
 
     // Render to the default framebuffer (or specified FBO)
-    void render(int width, int height, int fbo = 0);
+    // flip: true to flip Y (required for EGL/WGL coordinate systems)
+    void render(int width, int height, int fbo = 0, bool flip = true);
 
     // Playback control
     void stop() override;
