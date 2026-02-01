@@ -303,7 +303,7 @@ set(COMMON_SOURCES
     src/player/opengl_renderer.cpp
     src/player/video_stack.cpp
     src/player/mpv_event_thread.cpp
-    src/player/video_render_thread.cpp
+    src/player/video_render_controller.cpp
     src/player/media_session_thread.cpp
     src/settings.cpp
     src/ui/menu_overlay.cpp

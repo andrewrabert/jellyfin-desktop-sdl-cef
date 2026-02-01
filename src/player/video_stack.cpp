@@ -139,17 +139,23 @@ VideoStack VideoStack::create(SDL_Window* window, int width, int height, EGLCont
         stack.renderer = std::make_unique<VulkanSubsurfaceRenderer>(player.get(), g_wayland_subsurface.get());
         stack.player = std::move(player);
     } else {
-        // X11: OpenGL composition
+        // X11: OpenGL composition with threaded rendering
         auto player = std::make_unique<MpvPlayerGL>();
         if (!player->init(egl)) {
             LOG_ERROR(LOG_MPV, "MpvPlayerGL init failed");
             return stack;
         }
 
-        stack.renderer = std::make_unique<OpenGLRenderer>(player.get());
+        auto renderer = std::make_unique<OpenGLRenderer>(player.get());
+        if (!renderer->initThreaded(egl)) {
+            LOG_ERROR(LOG_VIDEO, "OpenGLRenderer threaded init failed");
+            return stack;
+        }
+
+        stack.renderer = std::move(renderer);
         stack.player = std::move(player);
 
-        LOG_INFO(LOG_PLATFORM, "Using OpenGL composition for video (X11, no HDR)");
+        LOG_INFO(LOG_PLATFORM, "Using OpenGL composition for video (X11, threaded)");
     }
 
     return stack;

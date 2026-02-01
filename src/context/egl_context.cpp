@@ -228,3 +228,44 @@ bool EGLContext_::resize(int width, int height) {
     // X11 window resize is handled by SDL/X11VideoLayer
     return true;
 }
+
+EGLContext EGLContext_::createSharedContext() const {
+    if (display_ == EGL_NO_DISPLAY || context_ == EGL_NO_CONTEXT) {
+        return EGL_NO_CONTEXT;
+    }
+
+    EGLint context_attribs[] = {
+        EGL_CONTEXT_MAJOR_VERSION, 3,
+        EGL_CONTEXT_MINOR_VERSION, 0,
+        EGL_NONE
+    };
+
+    EGLContext shared = eglCreateContext(display_, config_, context_, context_attribs);
+    if (shared == EGL_NO_CONTEXT) {
+        LOG_ERROR(LOG_GL, "[EGL] Failed to create shared context");
+        return EGL_NO_CONTEXT;
+    }
+    LOG_INFO(LOG_GL, "[EGL] Created shared context");
+    return shared;
+}
+
+void EGLContext_::destroyContext(EGLContext ctx) const {
+    if (display_ != EGL_NO_DISPLAY && ctx != EGL_NO_CONTEXT) {
+        eglDestroyContext(display_, ctx);
+    }
+}
+
+bool EGLContext_::makeCurrent(EGLContext ctx) const {
+    if (display_ == EGL_NO_DISPLAY) return false;
+    if (ctx == EGL_NO_CONTEXT) {
+        return eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT) == EGL_TRUE;
+    }
+    // For shared context, use surfaceless rendering (EGL_NO_SURFACE)
+    // This requires EGL_KHR_surfaceless_context extension
+    return eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx) == EGL_TRUE;
+}
+
+bool EGLContext_::makeCurrentMain() const {
+    if (display_ == EGL_NO_DISPLAY) return false;
+    return eglMakeCurrent(display_, surface_, surface_, context_) == EGL_TRUE;
+}

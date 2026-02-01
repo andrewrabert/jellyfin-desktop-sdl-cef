@@ -21,8 +21,17 @@ public:
     void swapBuffers();
     bool resize(int width, int height);
 
+    // Create a shared context for use on another thread
+    EGLContext createSharedContext() const;
+    void destroyContext(EGLContext ctx) const;
+
+    // Make a context current on the calling thread (use EGL_NO_CONTEXT to release)
+    bool makeCurrent(EGLContext ctx) const;
+    bool makeCurrentMain() const;
+
     EGLDisplay display() const { return display_; }
     EGLContext context() const { return context_; }
+    EGLConfig config() const { return config_; }
     int width() const { return width_; }
     int height() const { return height_; }
 

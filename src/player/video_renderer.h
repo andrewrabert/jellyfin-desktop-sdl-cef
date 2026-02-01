@@ -8,6 +8,9 @@ public:
     virtual bool hasFrame() const = 0;
     virtual bool render(int width, int height) = 0;
 
+    // Composite video to screen (for threaded OpenGL renderers)
+    virtual void composite(int width, int height) { (void)width; (void)height; }
+
     // Subsurface lifecycle (no-op for composite renderers)
     virtual void setVisible(bool visible) = 0;
     virtual void resize(int width, int height) = 0;

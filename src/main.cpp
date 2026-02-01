@@ -53,7 +53,7 @@ void wakeMacEventLoop();
 #include "player/video_stack.h"
 #include "player/video_renderer.h"
 #include "player/mpv_event_thread.h"
-#include "player/video_render_thread.h"
+#include "player/video_render_controller.h"
 #include "cef/cef_app.h"
 #include "cef/cef_client.h"
 #include "cef/cef_thread.h"
@@ -942,11 +942,12 @@ int main(int argc, char* argv[]) {
     mpvEvents.start(mpv);
 
 #if !defined(_WIN32) && !defined(__APPLE__)
-    // Start video render thread - renders video on dedicated thread to avoid blocking main loop
-    VideoRenderThread videoRenderThread;
-    videoRenderThread.start(&videoRenderer);
-    mpv->setRedrawCallback([&videoRenderThread]() {
-        videoRenderThread.notify();
+    // Both Wayland and X11 use threaded rendering
+    // Wayland: Vulkan subsurface, X11: OpenGL with shared context + FBO
+    VideoRenderController videoController;
+    videoController.startThreaded(&videoRenderer);
+    mpv->setRedrawCallback([&videoController]() {
+        videoController.notify();
     });
 #endif
 
@@ -1049,8 +1050,8 @@ int main(int argc, char* argv[]) {
                 has_video = false;
                 video_ready = false;
 #if !defined(_WIN32) && !defined(__APPLE__)
-                videoRenderThread.setActive(false);
-                videoRenderThread.resetVideoReady();
+                videoController.setActive(false);
+                videoController.resetVideoReady();
 #endif
                 videoRenderer.setVisible(false);
                 client->emitFinished();
@@ -1061,8 +1062,8 @@ int main(int argc, char* argv[]) {
                 has_video = false;
                 video_ready = false;
 #if !defined(_WIN32) && !defined(__APPLE__)
-                videoRenderThread.setActive(false);
-                videoRenderThread.resetVideoReady();
+                videoController.setActive(false);
+                videoController.resetVideoReady();
 #endif
                 videoRenderer.setVisible(false);
                 client->emitCanceled();
@@ -1097,8 +1098,8 @@ int main(int argc, char* argv[]) {
                 has_video = false;
                 video_ready = false;
 #if !defined(_WIN32) && !defined(__APPLE__)
-                videoRenderThread.setActive(false);
-                videoRenderThread.resetVideoReady();
+                videoController.setActive(false);
+                videoController.resetVideoReady();
 #endif
                 videoRenderer.setVisible(false);
                 client->emitError(ev.error);
@@ -1254,7 +1255,7 @@ int main(int argc, char* argv[]) {
                 egl.resize(physical_w, physical_h);
 
                 // Resize video layer on render thread (no-op for X11/OpenGL)
-                videoRenderThread.requestResize(physical_w, physical_h);
+                videoController.requestResize(physical_w, physical_h);
                 videoRenderer.setDestinationSize(current_width, current_height);
 
                 // Track resize time for paint matching
@@ -1326,9 +1327,9 @@ int main(int argc, char* argv[]) {
                         videoRenderer.setVisible(true);
                         LOG_INFO(LOG_MAIN, "Video loaded, has_video=true");
 #if !defined(_WIN32) && !defined(__APPLE__)
-                        videoRenderThread.setActive(true);
+                        videoController.setActive(true);
                         if (videoRenderer.isHdr()) {
-                            videoRenderThread.requestSetColorspace();
+                            videoController.requestSetColorspace();
                         }
 #else
                         if (videoRenderer.isHdr()) {
@@ -1354,8 +1355,8 @@ int main(int argc, char* argv[]) {
                     has_video = false;
                     video_ready = false;
 #if !defined(_WIN32) && !defined(__APPLE__)
-                    videoRenderThread.setActive(false);
-                    videoRenderThread.resetVideoReady();
+                    videoController.setActive(false);
+                    videoController.resetVideoReady();
 #endif
                     videoRenderer.setVisible(false);
                     // mpv END_FILE event will trigger finished callback
@@ -1542,18 +1543,17 @@ int main(int argc, char* argv[]) {
 
         frameContext.endFrame();
 #else
-        // Linux: Unified rendering for Wayland and X11 using abstractions
-        // Get physical dimensions for viewport (HiDPI)
+        // Linux: Get physical dimensions for viewport (HiDPI)
         float frame_scale = SDL_GetWindowDisplayScale(window);
         int viewport_w = static_cast<int>(current_width * frame_scale);
         int viewport_h = static_cast<int>(current_height * frame_scale);
         glViewport(0, 0, viewport_w, viewport_h);
 
-        // Update video render dimensions (thread renders when frames available)
-        videoRenderThread.setDimensions(viewport_w, viewport_h);
+        frameContext.beginFrame(clear_color, videoController.getClearAlpha());
+        videoController.render(viewport_w, viewport_h);
 
-        // Clear (alpha depends on renderer type and whether video is ready)
-        frameContext.beginFrame(clear_color, videoRenderer.getClearAlpha(videoRenderThread.isVideoReady()));
+        // Composite video texture (for threaded OpenGL renderers like X11)
+        videoRenderer.composite(viewport_w, viewport_h);
 
         // Flush and composite all browsers (back-to-front order)
         browsers.renderAll(viewport_w, viewport_h);
@@ -1577,7 +1577,7 @@ int main(int argc, char* argv[]) {
 #endif
     mediaSessionThread.stop();
 #if !defined(_WIN32) && !defined(__APPLE__)
-    videoRenderThread.stop();
+    videoController.stop();
 #endif
     mpvEvents.stop();
     mpv->cleanup();
