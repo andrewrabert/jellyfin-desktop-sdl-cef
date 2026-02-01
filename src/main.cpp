@@ -381,6 +381,8 @@ int main(int argc, char* argv[]) {
     PFMoveToApplicationsFolderIfNecessary();
 #endif
 
+    SDL_SetAppMetadata("Jellyfin Desktop CEF", nullptr, "org.jellyfin.JellyfinDesktopCEF");
+
     // SDL initialization with OpenGL (for main surface CEF overlay)
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         LOG_ERROR(LOG_MAIN, "SDL_Init failed: %s", SDL_GetError());

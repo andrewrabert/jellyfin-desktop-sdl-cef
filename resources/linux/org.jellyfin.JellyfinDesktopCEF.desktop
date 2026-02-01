@@ -2,8 +2,8 @@
 Name=Jellyfin Desktop CEF
 Comment=Experimental rewrite of Jellyfin Desktop built on CEF
 Exec=jellyfin-desktop-cef
-Icon=jellyfin-desktop-cef
+Icon=org.jellyfin.JellyfinDesktopCEF
 Terminal=false
 Type=Application
 Categories=AudioVideo;Video;Player;TV;
-StartupWMClass=jellyfin-desktop-cef
+StartupWMClass=org.jellyfin.JellyfinDesktopCEF

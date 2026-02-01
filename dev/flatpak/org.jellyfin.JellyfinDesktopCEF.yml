@@ -11,7 +11,7 @@ finish-args:
   - --share=network
   - --device=dri
   - --talk-name=org.freedesktop.ScreenSaver
-  - --own-name=org.mpris.MediaPlayer2.JellyfinDesktopCEF.*
+  - --own-name=org.mpris.MediaPlayer2.JellyfinDesktopCEF
 cleanup:
   - '*.a'
   - '*.la'
@@ -158,8 +158,8 @@ modules:
       - -DEXTERNAL_MPV_DIR=/app
     post-install:
       - mkdir -p /app/bin && ln -sf ../jellyfin-desktop-cef /app/bin/jellyfin-desktop-cef
-      - install -Dm644 resources/linux/jellyfin-desktop-cef.desktop /app/share/applications/org.jellyfin.JellyfinDesktopCEF.desktop
-      - install -Dm644 resources/linux/jellyfin-desktop-cef.svg /app/share/icons/hicolor/scalable/apps/org.jellyfin.JellyfinDesktopCEF.svg
+      - install -Dm644 resources/linux/org.jellyfin.JellyfinDesktopCEF.desktop /app/share/applications/org.jellyfin.JellyfinDesktopCEF.desktop
+      - install -Dm644 resources/linux/org.jellyfin.JellyfinDesktopCEF.svg /app/share/icons/hicolor/scalable/apps/org.jellyfin.JellyfinDesktopCEF.svg
       - install -Dm644 resources/linux/org.jellyfin.JellyfinDesktopCEF.metainfo.xml /app/share/metainfo/org.jellyfin.JellyfinDesktopCEF.metainfo.xml
     sources:
       - type: dir

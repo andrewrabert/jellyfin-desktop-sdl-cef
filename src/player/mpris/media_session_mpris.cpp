@@ -6,7 +6,7 @@
 static const char* MPRIS_PATH = "/org/mpris/MediaPlayer2";
 static const char* MPRIS_ROOT_IFACE = "org.mpris.MediaPlayer2";
 static const char* MPRIS_PLAYER_IFACE = "org.mpris.MediaPlayer2.Player";
-static const char* SERVICE_NAME = "org.mpris.MediaPlayer2.jellyfin_desktop_cef";
+static const char* SERVICE_NAME = "org.mpris.MediaPlayer2.JellyfinDesktopCEF";
 
 // Root interface property getters
 static int prop_get_identity(sd_bus* bus, const char* path, const char* interface,
