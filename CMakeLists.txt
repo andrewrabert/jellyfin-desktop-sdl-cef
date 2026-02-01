@@ -98,6 +98,7 @@ elseif(WIN32)
         src/platform/windows_video_layer.cpp
         src/compositor/opengl_compositor.cpp
         src/player/media_session.cpp
+        src/player/opengl_renderer.cpp
     )
     set(PLATFORM_LIBRARIES
         OpenGL::GL
@@ -165,6 +166,7 @@ else()
         src/player/media_session.cpp
         src/player/mpris/media_session_mpris.cpp
         src/player/vulkan_subsurface_renderer.cpp
+        src/player/opengl_renderer.cpp
         ${COLOR_MGMT_CODE_C}
         ${COLOR_MGMT_CLIENT_H}
         ${VIEWPORTER_CODE_C}
@@ -301,7 +303,6 @@ set(COMMON_SOURCES
     src/context/vulkan_context.cpp
     src/player/mpv/mpv_player_gl.cpp
     src/player/mpv/mpv_player_vk.cpp
-    src/player/opengl_renderer.cpp
     src/player/video_stack.cpp
     src/player/mpv_event_thread.cpp
     src/player/video_render_controller.cpp
