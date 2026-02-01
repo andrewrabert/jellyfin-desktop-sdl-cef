@@ -5,7 +5,7 @@ sdk: org.freedesktop.Sdk
 command: jellyfin-desktop-cef
 finish-args:
   - --socket=wayland
-  - --socket=fallback-x11
+  - --socket=x11
   - --socket=pulseaudio
   - --share=ipc
   - --share=network
@@ -48,6 +48,7 @@ modules:
   - name: libmpv
     buildsystem: meson
     config-opts:
+      - --libdir=lib
       - -Dalsa=disabled
       - -Dbuild-date=false
       - -Ddebug=false
@@ -86,6 +87,7 @@ modules:
       - name: libplacebo
         buildsystem: meson
         config-opts:
+          - --libdir=lib
           - -Ddemos=false
         cleanup:
           - /include
@@ -133,6 +135,7 @@ modules:
         buildsystem: cmake-ninja
         config-opts:
           - -DCMAKE_BUILD_TYPE=Release
+          - -DCMAKE_INSTALL_LIBDIR=lib
           - -DBUILD_STATIC=0
           - -DCMAKE_POLICY_VERSION_MINIMUM=3.5
         cleanup:
