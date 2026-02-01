@@ -1,5 +1,6 @@
 # Build
 build/
+dist/
 
 # Third-party dependencies (except submodules)
 third_party/*
