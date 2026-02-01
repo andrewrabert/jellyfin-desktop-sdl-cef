@@ -941,9 +941,11 @@ int main(int argc, char* argv[]) {
     MpvEventThread mpvEvents;
     mpvEvents.start(mpv);
 
-#if !defined(_WIN32) && !defined(__APPLE__)
-    // Both Wayland and X11 use threaded rendering
-    // Wayland: Vulkan subsurface, X11: OpenGL with shared context + FBO
+#ifndef __APPLE__
+    // Windows and Linux use threaded video rendering
+    // Windows: OpenGL with shared WGL context + FBO
+    // Linux/Wayland: Vulkan subsurface
+    // Linux/X11: OpenGL with shared EGL context + FBO
     VideoRenderController videoController;
     videoController.startThreaded(&videoRenderer);
     mpv->setRedrawCallback([&videoController]() {
@@ -1049,7 +1051,7 @@ int main(int argc, char* argv[]) {
                 LOG_INFO(LOG_MAIN, "Track finished naturally (EOF)");
                 has_video = false;
                 video_ready = false;
-#if !defined(_WIN32) && !defined(__APPLE__)
+#ifndef __APPLE__
                 videoController.setActive(false);
                 videoController.resetVideoReady();
 #endif
@@ -1061,7 +1063,7 @@ int main(int argc, char* argv[]) {
                 LOG_DEBUG(LOG_MAIN, "Track canceled (user stop)");
                 has_video = false;
                 video_ready = false;
-#if !defined(_WIN32) && !defined(__APPLE__)
+#ifndef __APPLE__
                 videoController.setActive(false);
                 videoController.resetVideoReady();
 #endif
@@ -1097,7 +1099,7 @@ int main(int argc, char* argv[]) {
                 LOG_ERROR(LOG_MAIN, "Playback error: %s", ev.error.c_str());
                 has_video = false;
                 video_ready = false;
-#if !defined(_WIN32) && !defined(__APPLE__)
+#ifndef __APPLE__
                 videoController.setActive(false);
                 videoController.resetVideoReady();
 #endif
@@ -1249,7 +1251,7 @@ int main(int argc, char* argv[]) {
 #elif defined(_WIN32)
                 // Resize WGL context
                 wgl.resize(current_width, current_height);
-                video_needs_rerender = true;  // Force video rerender on resize
+                videoController.requestResize(current_width, current_height);
 #else
                 // Resize EGL context
                 egl.resize(physical_w, physical_h);
@@ -1326,7 +1328,7 @@ int main(int argc, char* argv[]) {
                         has_video = true;
                         videoRenderer.setVisible(true);
                         LOG_INFO(LOG_MAIN, "Video loaded, has_video=true");
-#if !defined(_WIN32) && !defined(__APPLE__)
+#ifndef __APPLE__
                         videoController.setActive(true);
                         if (videoRenderer.isHdr()) {
                             videoController.requestSetColorspace();
@@ -1354,7 +1356,7 @@ int main(int argc, char* argv[]) {
                     mpv->stop();
                     has_video = false;
                     video_ready = false;
-#if !defined(_WIN32) && !defined(__APPLE__)
+#ifndef __APPLE__
                     videoController.setActive(false);
                     videoController.resetVideoReady();
 #endif
@@ -1527,16 +1529,13 @@ int main(int argc, char* argv[]) {
         // Flush and composite all browsers (back-to-front order)
         browsers.renderAll(current_width, current_height);
 #elif defined(_WIN32)
-        // Windows: OpenGL mpv rendering directly to default framebuffer
+        // Windows: Threaded OpenGL rendering with FBO compositing
         glViewport(0, 0, current_width, current_height);
-        frameContext.beginFrame(clear_color, videoRenderer.getClearAlpha(video_ready));
+        frameContext.beginFrame(clear_color, videoController.getClearAlpha());
+        videoController.render(current_width, current_height);
 
-        // Render video (underneath the browser UI)
-        if (has_video && (videoRenderer.hasFrame() || video_needs_rerender)) {
-            videoRenderer.render(current_width, current_height);
-            video_ready = true;
-            video_needs_rerender = false;
-        }
+        // Composite video texture (from threaded FBO)
+        videoRenderer.composite(current_width, current_height);
 
         // Flush and composite all browsers (back-to-front order)
         browsers.renderAll(current_width, current_height);
@@ -1576,7 +1575,7 @@ int main(int argc, char* argv[]) {
     SDL_RemoveEventWatch(liveResizeCallback, &live_resize_ctx);
 #endif
     mediaSessionThread.stop();
-#if !defined(_WIN32) && !defined(__APPLE__)
+#ifndef __APPLE__
     videoController.stop();
 #endif
     mpvEvents.stop();

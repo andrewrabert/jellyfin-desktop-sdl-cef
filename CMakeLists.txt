@@ -93,6 +93,7 @@ elseif(WIN32)
 
     set(PLATFORM_SOURCES
         src/context/wgl_context.cpp
+        src/context/gl_loader.cpp
         src/context/opengl_frame_context.cpp
         src/platform/windows_video_layer.cpp
         src/compositor/opengl_compositor.cpp

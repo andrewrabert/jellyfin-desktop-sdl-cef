@@ -1,6 +1,7 @@
 #ifdef _WIN32
 
 #include "context/wgl_context.h"
+#include "context/gl_loader.h"
 #include "logging.h"
 
 WGLContext::WGLContext() = default;
@@ -51,6 +52,12 @@ bool WGLContext::init(SDL_Window* window) {
     }
 
     makeCurrent();
+
+    // Load GL extension functions
+    if (!gl::initGLLoader()) {
+        LOG_ERROR(LOG_GL, "[WGL] Failed to load GL extensions");
+        return false;
+    }
 
     // Get window size
     SDL_GetWindowSize(window, &width_, &height_);
@@ -108,6 +115,48 @@ void* WGLContext::getProcAddress(const char* name) {
         return reinterpret_cast<void*>(GetProcAddress(opengl32, name));
     }
     return nullptr;
+}
+
+HGLRC WGLContext::createSharedContext() const {
+    if (!hdc_ || !hglrc_) {
+        return nullptr;
+    }
+
+    // Create a new context and share lists with the main context
+    HGLRC shared = wglCreateContext(hdc_);
+    if (!shared) {
+        LOG_ERROR(LOG_GL, "[WGL] Failed to create shared context");
+        return nullptr;
+    }
+
+    // Share display lists (textures, VBOs, etc.) between contexts
+    if (!wglShareLists(hglrc_, shared)) {
+        LOG_ERROR(LOG_GL, "[WGL] Failed to share lists between contexts");
+        wglDeleteContext(shared);
+        return nullptr;
+    }
+
+    LOG_INFO(LOG_GL, "[WGL] Created shared context");
+    return shared;
+}
+
+void WGLContext::destroyContext(HGLRC ctx) const {
+    if (ctx) {
+        wglDeleteContext(ctx);
+    }
+}
+
+bool WGLContext::makeCurrent(HGLRC ctx) const {
+    if (!hdc_) return false;
+    if (!ctx) {
+        return wglMakeCurrent(nullptr, nullptr) == TRUE;
+    }
+    return wglMakeCurrent(hdc_, ctx) == TRUE;
+}
+
+bool WGLContext::makeCurrentMain() const {
+    if (!hdc_ || !hglrc_) return false;
+    return wglMakeCurrent(hdc_, hglrc_) == TRUE;
 }
 
 #endif // _WIN32

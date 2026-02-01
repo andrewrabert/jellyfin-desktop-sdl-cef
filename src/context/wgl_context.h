@@ -16,6 +16,12 @@ public:
     void swapBuffers();
     bool resize(int width, int height);
 
+    // Create a shared context for use on another thread
+    HGLRC createSharedContext() const;
+    void destroyContext(HGLRC ctx) const;
+    bool makeCurrent(HGLRC ctx) const;
+    bool makeCurrentMain() const;
+
     HDC hdc() const { return hdc_; }
     HGLRC hglrc() const { return hglrc_; }
     int width() const { return width_; }

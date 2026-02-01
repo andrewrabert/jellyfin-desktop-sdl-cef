@@ -1,16 +1,40 @@
 #include "opengl_renderer.h"
 #include "mpv/mpv_player_gl.h"
-#include "context/egl_context.h"
 #include "logging.h"
 
+#ifdef _WIN32
+#include "context/wgl_context.h"
+#else
+#include "context/egl_context.h"
+#endif
+
 // Shader for compositing video texture (fullscreen triangle)
+#ifdef _WIN32
+static const char* composite_vert = R"(#version 330 core
+out vec2 vTexCoord;
+void main() {
+    vec2 pos = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    vTexCoord = pos;
+    vTexCoord.y = 1.0 - vTexCoord.y;
+    gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
+}
+)";
+
+static const char* composite_frag = R"(#version 330 core
+in vec2 vTexCoord;
+out vec4 fragColor;
+uniform sampler2D videoTex;
+void main() {
+    fragColor = texture(videoTex, vTexCoord);
+}
+)";
+#else
 static const char* composite_vert = R"(#version 300 es
 out vec2 vTexCoord;
 void main() {
-    // Fullscreen triangle: vertices at (-1,-1), (3,-1), (-1,3)
     vec2 pos = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
     vTexCoord = pos;
-    vTexCoord.y = 1.0 - vTexCoord.y;  // Flip Y for video
+    vTexCoord.y = 1.0 - vTexCoord.y;
     gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
 }
 )";
@@ -24,6 +48,7 @@ void main() {
     fragColor = texture(videoTex, vTexCoord);
 }
 )";
+#endif
 
 OpenGLRenderer::OpenGLRenderer(MpvPlayerGL* player) : player_(player) {}
 
@@ -31,6 +56,19 @@ OpenGLRenderer::~OpenGLRenderer() {
     cleanup();
 }
 
+#ifdef _WIN32
+bool OpenGLRenderer::initThreaded(WGLContext* wgl) {
+    wgl_ = wgl;
+    shared_ctx_ = wgl->createSharedContext();
+    if (!shared_ctx_) {
+        LOG_ERROR(LOG_VIDEO, "Failed to create shared WGL context for video");
+        return false;
+    }
+    threaded_ = true;
+    LOG_INFO(LOG_VIDEO, "OpenGLRenderer initialized for threaded rendering (WGL)");
+    return true;
+}
+#else
 bool OpenGLRenderer::initThreaded(EGLContext_* egl) {
     egl_ = egl;
     shared_ctx_ = egl->createSharedContext();
@@ -39,66 +77,76 @@ bool OpenGLRenderer::initThreaded(EGLContext_* egl) {
         return false;
     }
     threaded_ = true;
-    LOG_INFO(LOG_VIDEO, "OpenGLRenderer initialized for threaded rendering");
+    LOG_INFO(LOG_VIDEO, "OpenGLRenderer initialized for threaded rendering (EGL)");
     return true;
 }
+#endif
 
 bool OpenGLRenderer::hasFrame() const {
     return player_->hasFrame();
 }
 
 void OpenGLRenderer::createFBO(int width, int height) {
-    if (fbo_ && fbo_width_ == width && fbo_height_ == height) {
+    if (buffers_[0].fbo && fbo_width_ == width && fbo_height_ == height) {
         return;  // Already have correct size
     }
 
     destroyFBO();
 
-    glGenFramebuffers(1, &fbo_);
-    glGenTextures(1, &texture_);
-    glGenRenderbuffers(1, &depth_rb_);
+    // Create double-buffered FBOs
+    for (int i = 0; i < NUM_BUFFERS; i++) {
+        auto& buf = buffers_[i];
 
-    glBindTexture(GL_TEXTURE_2D, texture_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glGenFramebuffers(1, &buf.fbo);
+        glGenTextures(1, &buf.texture);
+        glGenRenderbuffers(1, &buf.depth_rb);
 
-    glBindRenderbuffer(GL_RENDERBUFFER, depth_rb_);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, width, height);
+        glBindTexture(GL_TEXTURE_2D, buf.texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture_, 0);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth_rb_);
+        glBindRenderbuffer(GL_RENDERBUFFER, buf.depth_rb);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, width, height);
 
-    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-    if (status != GL_FRAMEBUFFER_COMPLETE) {
-        LOG_ERROR(LOG_VIDEO, "FBO incomplete: 0x%x", status);
-        destroyFBO();
-        return;
+        glBindFramebuffer(GL_FRAMEBUFFER, buf.fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, buf.texture, 0);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, buf.depth_rb);
+
+        GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (status != GL_FRAMEBUFFER_COMPLETE) {
+            LOG_ERROR(LOG_VIDEO, "FBO %d incomplete: 0x%x", i, status);
+            destroyFBO();
+            return;
+        }
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     fbo_width_ = width;
     fbo_height_ = height;
-    current_texture_.store(texture_);  // Publish texture atomically
-    LOG_INFO(LOG_VIDEO, "Created video FBO: %dx%d", width, height);
+    write_index_ = 0;
+    LOG_INFO(LOG_VIDEO, "Created double-buffered video FBOs: %dx%d", width, height);
 }
 
 void OpenGLRenderer::destroyFBO() {
-    current_texture_.store(0);  // Clear atomic first so composite() won't use stale texture
-    if (fbo_) {
-        glDeleteFramebuffers(1, &fbo_);
-        fbo_ = 0;
-    }
-    if (texture_) {
-        glDeleteTextures(1, &texture_);
-        texture_ = 0;
-    }
-    if (depth_rb_) {
-        glDeleteRenderbuffers(1, &depth_rb_);
-        depth_rb_ = 0;
+    front_texture_.store(0);  // Clear atomic first
+
+    for (int i = 0; i < NUM_BUFFERS; i++) {
+        auto& buf = buffers_[i];
+        if (buf.fbo) {
+            glDeleteFramebuffers(1, &buf.fbo);
+            buf.fbo = 0;
+        }
+        if (buf.texture) {
+            glDeleteTextures(1, &buf.texture);
+            buf.texture = 0;
+        }
+        if (buf.depth_rb) {
+            glDeleteRenderbuffers(1, &buf.depth_rb);
+            buf.depth_rb = 0;
+        }
     }
     fbo_width_ = 0;
     fbo_height_ = 0;
@@ -107,32 +155,49 @@ void OpenGLRenderer::destroyFBO() {
 bool OpenGLRenderer::render(int width, int height) {
     if (threaded_) {
         // Make shared context current on this thread
+#ifdef _WIN32
+        if (!wgl_->makeCurrent(shared_ctx_)) {
+#else
         if (!egl_->makeCurrent(shared_ctx_)) {
+#endif
             LOG_ERROR(LOG_VIDEO, "Failed to make shared context current");
             return false;
         }
 
-        // Create/resize FBO if needed (brief lock)
+        // Create/resize FBOs if needed (brief lock)
         {
             std::lock_guard<std::mutex> lock(fbo_mutex_);
             createFBO(width, height);
-            if (!fbo_) {
+            if (!buffers_[0].fbo) {
                 LOG_ERROR(LOG_VIDEO, "FBO creation failed");
+#ifdef _WIN32
+                wgl_->makeCurrent(nullptr);
+#else
                 egl_->makeCurrent(EGL_NO_CONTEXT);
+#endif
                 return false;
             }
         }
 
-        // Render without holding lock - FBO/texture IDs don't change during render
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
+        // Render to back buffer
+        auto& back = buffers_[write_index_];
+        glBindFramebuffer(GL_FRAMEBUFFER, back.fbo);
         glViewport(0, 0, width, height);
-        player_->render(width, height, fbo_, false);  // No flip - FBO is top-down
+        player_->render(width, height, back.fbo, false);  // No flip - FBO is top-down
 
-        // Flush commands (non-blocking, just ensures they're submitted)
-        glFlush();
+        // Wait for render to complete before publishing texture
+        glFinish();
+
+        // Publish this texture as front and swap to other buffer for next frame
+        front_texture_.store(back.texture);
+        write_index_ = (write_index_ + 1) % NUM_BUFFERS;
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
+#ifdef _WIN32
+        wgl_->makeCurrent(nullptr);
+#else
         egl_->makeCurrent(EGL_NO_CONTEXT);
+#endif
         has_rendered_.store(true);
     } else {
         // Direct rendering to default framebuffer
@@ -143,7 +208,7 @@ bool OpenGLRenderer::render(int width, int height) {
 }
 
 void OpenGLRenderer::composite(int width, int height) {
-    if (!threaded_ || !has_rendered_.load() || !texture_) {
+    if (!threaded_ || !has_rendered_.load()) {
         return;
     }
 
@@ -168,8 +233,8 @@ void OpenGLRenderer::composite(int width, int height) {
         glGenVertexArrays(1, &composite_vao_);
     }
 
-    // Use atomically published texture ID
-    GLuint tex = current_texture_.load();
+    // Use atomically published front texture
+    GLuint tex = front_texture_.load();
     if (!tex) return;
 
     glUseProgram(composite_program_);
@@ -184,15 +249,21 @@ void OpenGLRenderer::composite(int width, int height) {
 }
 
 void OpenGLRenderer::resize(int width, int height) {
-    // FBO will be recreated on next render if size changed
+    // FBOs will be recreated on next render if size changed
     (void)width;
     (void)height;
 }
 
 void OpenGLRenderer::cleanup() {
+#ifdef _WIN32
+    if (threaded_ && wgl_) {
+        wgl_->makeCurrent(shared_ctx_);
+    }
+#else
     if (threaded_ && egl_) {
         egl_->makeCurrent(shared_ctx_);
     }
+#endif
 
     destroyFBO();
 
@@ -205,11 +276,19 @@ void OpenGLRenderer::cleanup() {
         composite_vao_ = 0;
     }
 
+#ifdef _WIN32
+    if (threaded_ && wgl_) {
+        wgl_->makeCurrent(nullptr);
+        wgl_->destroyContext(shared_ctx_);
+        shared_ctx_ = nullptr;
+    }
+#else
     if (threaded_ && egl_) {
         egl_->makeCurrent(EGL_NO_CONTEXT);
         egl_->destroyContext(shared_ctx_);
         shared_ctx_ = EGL_NO_CONTEXT;
     }
+#endif
 
     threaded_ = false;
     has_rendered_.store(false);

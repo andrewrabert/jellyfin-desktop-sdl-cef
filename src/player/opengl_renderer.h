@@ -1,12 +1,19 @@
 #pragma once
 #include "video_renderer.h"
+
+#ifdef _WIN32
+#include "context/gl_loader.h"
+#else
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
+#endif
+
 #include <atomic>
 #include <mutex>
 
 class MpvPlayerGL;
 class EGLContext_;
+class WGLContext;
 
 class OpenGLRenderer : public VideoRenderer {
 public:
@@ -14,15 +21,15 @@ public:
     ~OpenGLRenderer();
 
     // Initialize for threaded rendering (creates shared context + FBO)
+#ifdef _WIN32
+    bool initThreaded(WGLContext* wgl);
+#else
     bool initThreaded(EGLContext_* egl);
+#endif
 
     bool hasFrame() const override;
-
-    // Render video to FBO (called from video thread)
     bool render(int width, int height) override;
-
-    // Composite video texture to screen (called from main thread)
-    void composite(int width, int height);
+    void composite(int width, int height) override;
 
     void setVisible(bool) override {}
     void resize(int width, int height) override;
@@ -32,29 +39,37 @@ public:
     float getClearAlpha(bool video_ready) const override;
     bool isHdr() const override { return false; }
 
-    bool isThreaded() const { return threaded_; }
-
 private:
     void createFBO(int width, int height);
     void destroyFBO();
 
     MpvPlayerGL* player_;
-    EGLContext_* egl_ = nullptr;
-    EGLContext shared_ctx_ = EGL_NO_CONTEXT;
     bool threaded_ = false;
 
-    // FBO for offscreen rendering
-    GLuint fbo_ = 0;
-    GLuint texture_ = 0;
-    GLuint depth_rb_ = 0;
+#ifdef _WIN32
+    WGLContext* wgl_ = nullptr;
+    HGLRC shared_ctx_ = nullptr;
+#else
+    EGLContext_* egl_ = nullptr;
+    EGLContext shared_ctx_ = EGL_NO_CONTEXT;
+#endif
+
+    // Double-buffered FBOs for lock-free rendering
+    static constexpr int NUM_BUFFERS = 2;
+    struct FBOBuffer {
+        GLuint fbo = 0;
+        GLuint texture = 0;
+        GLuint depth_rb = 0;
+    };
+    FBOBuffer buffers_[NUM_BUFFERS];
+    int write_index_ = 0;  // Render thread writes here
     int fbo_width_ = 0;
     int fbo_height_ = 0;
 
-    // Shader for compositing
     GLuint composite_program_ = 0;
     GLuint composite_vao_ = 0;
 
     std::mutex fbo_mutex_;
     std::atomic<bool> has_rendered_{false};
-    std::atomic<GLuint> current_texture_{0};  // Atomic for lock-free composite access
+    std::atomic<GLuint> front_texture_{0};  // Main thread reads this
 };

@@ -81,10 +81,16 @@ VideoStack VideoStack::create(SDL_Window* window, int width, int height, WGLCont
         return stack;
     }
 
-    stack.renderer = std::make_unique<OpenGLRenderer>(player.get());
+    auto renderer = std::make_unique<OpenGLRenderer>(player.get());
+    if (!renderer->initThreaded(wgl)) {
+        LOG_ERROR(LOG_VIDEO, "OpenGLRenderer threaded init failed");
+        return stack;
+    }
+
+    stack.renderer = std::move(renderer);
     stack.player = std::move(player);
 
-    LOG_INFO(LOG_PLATFORM, "Using OpenGL composition for video (Windows)");
+    LOG_INFO(LOG_PLATFORM, "Using OpenGL composition for video (Windows, threaded)");
     return stack;
 }
 
